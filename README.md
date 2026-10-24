@@ -20,8 +20,11 @@ From this checkout:
 `http://127.0.0.1:8765/` (or a free local port if 8765 is occupied). Keep the command running for live updates; Ctrl+C stops it.
 The browser opens immediately while the first historical import runs in the background.
 The collector rescans every 15 seconds, and the page checks for updates every two seconds.
-The sidebar opens four pages: Overview (`/`), Sessions (`/sessions`), Projects
-(`/projects`), and Breakdown (`/breakdown`). The Sessions page lists one row per session,
+The sidebar opens six pages: Overview (`/`), Sessions (`/sessions`), Projects
+(`/projects`), Breakdown (`/breakdown`), Pricing (`/pricing`), and Alerts (`/alerts`).
+The Overview leads with estimated cost: the period total with the share of tokens that
+could be priced, the average per active day, a cost-over-time chart (switchable to
+tokens), and cost by model. The Sessions page lists one row per session,
 with subagent usage included in its parent. Selecting a session opens its page
 (`/sessions/<id>`), which shows the session's totals, an hourly or daily timeline, the
 tree of subagents with each one's share, a per-model split, and every recorded completion
@@ -122,16 +125,29 @@ The JSON parser necessarily reads log records into memory to extract those field
 
 Cost estimates use the bundled [2026-10-24 pricing snapshot](src/meta_cost_center/pricing.json),
 verified against [Meta's pricing page](https://dev.meta.ai/docs/pricing-rate-limits).
-It applies only from its observation date because earlier effective dates were not
-verified. Older usage, unknown model aliases, and missing cache counts have unknown
-costs. Supply `--prices path.json` for additional audited historical rates; use the
-same JSON schema, with a source URL, retrieval date, effective date, snapshot version,
-model ID, USD currency, and three per-million rates. The newest applicable effective
-date wins. All arithmetic uses `Decimal`. Non-token charges remain unknown, so even
-priced token totals are partial estimates. Reports expose the pricing snapshot in
-exports and keep unknown costs distinct from zero.
+Only publicly documented models belong in that file. Usage recorded before a rate's
+verified date is priced with the model's earliest known rate and marked as an assumption
+("≈" in the dashboard, `rate_assumed` in exports). Supply `--prices path.json` for
+additional audited historical rates; use the same JSON schema, with a source URL,
+retrieval date, effective date, snapshot version, model ID, USD currency, and three
+per-million rates. The newest applicable effective date wins.
 
-Manual account observations and local warnings:
+For models without public pricing, enter a rate on the dashboard's Pricing page. Local
+rates are stored only in the local usage database, never in the project files, so the
+names of internal or preview models are not published with the repository. A local rate
+overrides the public rate for its model and applies to all dates. Usage with no rate,
+or with missing cache counts, keeps an unknown cost ("+" marks a partly priced total).
+All arithmetic uses `Decimal`. Non-token charges remain unknown, so even priced token
+totals are partial estimates.
+
+Cost alerts are set on the Alerts page. Each alert is a USD limit for a local calendar
+day, a week starting on Monday, or a calendar month, covering all projects or one
+project, and optionally pay-as-you-go usage only. Each alert has up to four warning
+levels as percentages of its limit (80% by default). A bar across the top of every page
+appears when an alert passes a warning level or its limit, and the dashboard can send a
+desktop notification once per alert, window, and level while a dashboard tab is open. Spend excludes unpriced usage, so it is a lower bound. Alerts never stop usage.
+
+Manual account observations and a monthly alert from the command line:
 
 ```bash
 ./muse-cost reconcile add --date 2026-10-24 --from 2026-10-01 --to 2026-10-24 \
@@ -141,10 +157,11 @@ Manual account observations and local warnings:
 ```
 
 Observations remain separate from local estimates; different scope, currencies,
-taxes, credits, and billing lag prevent a reliable automatic comparison. The local
-warning uses the known month-to-date API-equivalent subtotal across all billing
-modes, beginning at 50% of the threshold. It cannot stop charges and only runs while
-the CLI is running.
+taxes, credits, and billing lag prevent a reliable automatic comparison. `alert set`
+adds an all-projects monthly alert, the same as one created on the Alerts page, using
+the percentages below 100 (up to four) as its warning levels. Text reports list alerts at their
+warning level or over their limit. A threshold stored by an earlier version moves into
+the Alerts page automatically.
 
 Current accuracy limits:
 

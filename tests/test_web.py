@@ -107,6 +107,39 @@ class WebTests(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError) as error:self.get(path)
             self.assertEqual(error.exception.code,code,path)
             error.exception.close()
+    def send_json(self,method,path,body,content_type='application/json',headers=None):
+        request=urllib.request.Request(self.url+path,data=json.dumps(body).encode(),method=method,
+                                       headers={'Content-Type':content_type,**(headers or {})})
+        try:
+            with urllib.request.urlopen(request,timeout=5) as response:return response.status,json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            with error:return error.code,json.loads(error.read())
+    def test_pricing_and_alert_api(self):
+        self.assertEqual(self.get('/pricing')[0],200)
+        self.assertEqual(self.get('/alerts')[0],200)
+        models=json.loads(self.get('/api/pricing')[1])
+        self.assertEqual([(m['model'],m['source']) for m in models],[('test-model','public')])
+        self.assertEqual(self.send_json('PUT','/api/pricing/test-model',{'input_per_million':'0','cached_input_per_million':'0','output_per_million':'0'})[0],200)
+        self.assertEqual(json.loads(self.get('/api/pricing')[1])[0]['source'],'local')
+        self.assertEqual(json.loads(self.get('/api/dashboard?period=all')[1])['totals']['unknown_mode_equivalent_usd'],'0')
+        self.assertEqual(self.send_json('DELETE','/api/pricing/test-model',{})[0],200)
+        self.assertEqual(self.send_json('DELETE','/api/pricing/test-model',{})[0],404)
+        code,created=self.send_json('POST','/api/alerts',{'period':'day','limit_usd':'0.00001'})
+        self.assertEqual(code,201)
+        dashboard=json.loads(self.get('/api/dashboard?period=all')[1])
+        self.assertEqual([(a['id'],a['level']) for a in dashboard['alerts']],[(created['id'],'exceeded')])
+        self.assertEqual(self.send_json('PUT',f'/api/alerts/{created["id"]}',{'period':'day','limit_usd':'5','enabled':False})[0],200)
+        self.assertEqual(json.loads(self.get('/api/alerts')[1])[0]['level'],'paused')
+        for method,path,body,expected in (('POST','/api/alerts',{'period':'day','limit_usd':'-1'},400),
+                                          ('PUT','/api/alerts/999',{'period':'day','limit_usd':'1'},404),
+                                          ('PUT','/api/alerts/abc',{'period':'day','limit_usd':'1'},404),
+                                          ('POST','/api/pricing',{},404)):
+            self.assertEqual(self.send_json(method,path,body)[0],expected,(method,path))
+        # Cross-site writes: a form-encoded body or a foreign Origin is refused.
+        self.assertEqual(self.send_json('POST','/api/alerts',{'period':'day','limit_usd':'1'},'application/x-www-form-urlencoded')[0],415)
+        self.assertEqual(self.send_json('POST','/api/alerts',{'period':'day','limit_usd':'1'},headers={'Origin':'https://evil.example'})[0],403)
+        self.assertEqual(self.send_json('DELETE',f'/api/alerts/{created["id"]}',{})[0],200)
+        self.assertEqual(json.loads(self.get('/api/alerts')[1]),[])
     def test_occupied_port_preserves_original_error(self):
         with self.assertRaises(OSError) as error:
             DashboardServer(('127.0.0.1',self.server.server_port),self.root/'db.sqlite3',

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export async function jsonRequest(url, options = {}) {
   const response = await fetch(url, { cache: 'no-store', ...options });
@@ -7,13 +7,20 @@ export async function jsonRequest(url, options = {}) {
   return body;
 }
 
-/** Fetch url and poll it every two seconds; data resets when url changes. */
+/** Change local data (alerts, rates); the server requires a JSON body for every write. */
+export function send(method, url, body = {}) {
+  return jsonRequest(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+/** Fetch url and poll it every two seconds; data resets when url changes. reload() refetches at once. */
 export function useResource(url) {
   const [state, setState] = useState({ data: null, error: '', status: 0, loading: true });
+  const [tick, setTick] = useState(0);
+  const first = useRef(url);
   useEffect(() => {
     let active = true, timer;
     const controller = new AbortController();
-    setState({ data: null, error: '', status: 0, loading: true });
+    if (first.current !== url) { first.current = url; setState({ data: null, error: '', status: 0, loading: true }); }
     async function poll() {
       try {
         const data = await jsonRequest(url, { signal: controller.signal });
@@ -26,6 +33,6 @@ export function useResource(url) {
     }
     poll();
     return () => { active = false; controller.abort(); clearTimeout(timer); };
-  }, [url]);
-  return state;
+  }, [url, tick]);
+  return { ...state, reload: () => setTick(value => value + 1) };
 }

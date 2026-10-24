@@ -36,6 +36,12 @@ class CLITests(unittest.TestCase):
     def test_warning_levels_and_invalid_filters(self):
         text=self.command('alert','set','--monthly-usd','30','--at','50,80,100')
         self.assertIn('not a spend cap',text)
+        self.command('alert','set','--monthly-usd','0.00001')
+        prices=self.root/'prices.json'
+        prices.write_text(json.dumps({'rates':[{'model':'test-model','currency':'USD','effective_from':'2020-01-01',
+            'retrieved_at':'2020-01-01','snapshot_version':'fixture','source_url':'https://example.invalid',
+            'input_per_million':'1','cached_input_per_million':'0.1','output_per_million':'2'}]}))
+        self.assertIn('WARNING: Monthly limit for all projects',self.command('month','--prices',str(prices)))
         result=subprocess.run(self.base+['show','--from','bad-date']+self.options,
                               text=True,capture_output=True)
         self.assertEqual(result.returncode,1)

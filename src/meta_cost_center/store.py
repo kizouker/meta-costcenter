@@ -1,5 +1,7 @@
+import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -33,5 +35,40 @@ def connect(path):
       id INTEGER PRIMARY KEY, observed_at TEXT, period_start TEXT,
       period_end TEXT, amount TEXT, currency TEXT, kind TEXT, scope TEXT);
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+    -- Rates entered on this machine for models without public pricing. Never exported to the repo.
+    CREATE TABLE IF NOT EXISTS rates (
+      model TEXT PRIMARY KEY, input_per_million TEXT, cached_input_per_million TEXT,
+      output_per_million TEXT, updated_at TEXT);
+    CREATE TABLE IF NOT EXISTS alerts (
+      id INTEGER PRIMARY KEY, period TEXT, project TEXT, billing_mode TEXT,
+      limit_usd TEXT, warn_levels TEXT DEFAULT '[80]', enabled INTEGER DEFAULT 1, created_at TEXT);
     ''')
+    migrate_warn_levels(db)
+    migrate_monthly_warning(db)
     return db
+
+
+def migrate_warn_levels(db):
+    """Alerts first had one warning percentage; they now keep a JSON list of up to four."""
+    columns = {r[1] for r in db.execute('PRAGMA table_info(alerts)')}
+    if 'warn_percent' not in columns:
+        return
+    with db:
+        if 'warn_levels' not in columns:
+            db.execute("ALTER TABLE alerts ADD COLUMN warn_levels TEXT DEFAULT '[80]'")
+        db.execute('UPDATE alerts SET warn_levels = json_array(warn_percent)')
+        db.execute('ALTER TABLE alerts DROP COLUMN warn_percent')
+
+
+def migrate_monthly_warning(db):
+    """The CLI used to store one monthly threshold in settings; it is now an ordinary alert."""
+    row = db.execute("SELECT value FROM settings WHERE key='monthly_usd'").fetchone()
+    if not row:
+        return
+    levels = db.execute("SELECT value FROM settings WHERE key='alert_levels'").fetchone()
+    below = sorted({level for level in (json.loads(levels[0]) if levels else []) if 0 < level < 100})[:4]
+    with db:
+        db.execute('INSERT INTO alerts (period, project, billing_mode, limit_usd, warn_levels, enabled, created_at) '
+                   "VALUES ('month', NULL, NULL, ?, ?, 1, ?)",
+                   (row[0], json.dumps(below or [80]), datetime.now(timezone.utc).isoformat()))
+        db.execute("DELETE FROM settings WHERE key IN ('monthly_usd', 'alert_levels')")

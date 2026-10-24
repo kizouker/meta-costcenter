@@ -24,16 +24,39 @@ def load_prices(path):
     return rates
 
 
+RATE_FIELDS = ('input_per_million', 'cached_input_per_million', 'output_per_million')
+
+
+def with_local_rates(db, rates):
+    """Public rates plus rates entered on this machine; a local rate overrides public ones."""
+    local = [{'model': r['model'], 'effective_from': '0001-01-01', 'snapshot_version': 'local', 'local': True,
+              **{k: r[k] for k in RATE_FIELDS}} for r in db.execute('SELECT * FROM rates')]
+    return [r for r in rates if not r.get('local')] + local
+
+
+def rate_for(model, day, rates):
+    """The applicable rate and whether it is assumed (applied before its verified date)."""
+    candidates = [r for r in rates if r['model'] == model]
+    local = [r for r in candidates if r.get('local')]
+    if local:
+        return local[0], False
+    verified = [r for r in candidates if r['effective_from'] <= day]
+    if verified:
+        return max(verified, key=lambda r: r['effective_from']), False
+    if candidates:
+        return min(candidates, key=lambda r: r['effective_from']), True
+    return None, False
+
+
 def estimate(row, rates):
-    matches = [r for r in rates if r['model'] == row['model']
-               and r['effective_from'] <= row['recorded_at'][:10]]
-    if not matches or row['cached'] is None:
-        return None, None
-    rate = max(matches, key=lambda r: r['effective_from'])
+    """(USD value, pricing snapshot, assumed); value is None when the cost is unknown."""
+    rate, assumed = rate_for(row['model'], row['recorded_at'][:10], rates)
+    if rate is None or row['cached'] is None:
+        return None, None, False
     value = ((row['input'] - row['cached']) * Decimal(str(rate['input_per_million']))
              + row['cached'] * Decimal(str(rate['cached_input_per_million']))
              + row['output'] * Decimal(str(rate['output_per_million']))) / Decimal(1_000_000)
-    return value, rate['snapshot_version']
+    return value, rate['snapshot_version'], assumed
 
 
 def bounds(filters):
@@ -119,7 +142,7 @@ def query(db, filters):
 
 def totals(rows, rates):
     result = {'events': len(rows), 'input': 0, 'output': 0, 'cached': 0,
-              'cache_unknown_events': 0, 'cost_unknown_events': 0,
+              'cache_unknown_events': 0, 'cost_unknown_events': 0, 'cost_assumed_events': 0, 'priced_tokens': 0,
               'payg_usd': Decimal(0), 'subscription_equivalent_usd': Decimal(0),
               'unknown_mode_equivalent_usd': Decimal(0)}
     for row in rows:
@@ -127,10 +150,12 @@ def totals(rows, rates):
             result[key] += row[key]
         result['cached'] += row['cached'] or 0
         result['cache_unknown_events'] += row['cached'] is None
-        value, _ = estimate(row, rates)
+        value, _, assumed = estimate(row, rates)
+        result['cost_assumed_events'] += assumed
         if value is None:
             result['cost_unknown_events'] += 1
         else:
+            result['priced_tokens'] += row['input'] + row['output']
             key = {'payg': 'payg_usd', 'subscription': 'subscription_equivalent_usd'}.get(
                 row['billing_mode'], 'unknown_mode_equivalent_usd')
             result[key] += value
@@ -207,9 +232,9 @@ def period_only(filters):
 def with_estimates(rows, rates):
     result = []
     for r in rows:
-        value, snapshot = estimate(r, rates)
+        value, snapshot, assumed = estimate(r, rates)
         result.append({**{k: v for k, v in r.items() if k != 'source'},
-                       'api_equivalent_usd': value, 'pricing_snapshot': snapshot})
+                       'api_equivalent_usd': value, 'pricing_snapshot': snapshot, 'rate_assumed': assumed})
     return result
 
 
@@ -285,9 +310,9 @@ def lines(db, filters, rates, group='model', scan_result=None):
             f'Last scan: {source[0] or "never"} | malformed/unsupported: {source[1] or 0} | partial lines: {source[2] or 0}',
             f'Month-to-date (same non-date filters): input {month["input"]:,} | output {month["output"]:,}',
             f'Events {t["events"]:,} | Input {t["input"]:,} | Output {t["output"]:,} | Cached {t["cached"]:,}',
-            f'Estimated PAYG: {money(t["payg_usd"], t["cost_unknown_events"]) if t["cost_unknown_events"] < t["events"] else "unknown / no priced observations"}',
-            f'Subscription API-equivalent: {money(t["subscription_equivalent_usd"], t["cost_unknown_events"]) if t["cost_unknown_events"] < t["events"] else "unknown / no priced observations"}',
-            f'Unknown billing mode API-equivalent: {money(t["unknown_mode_equivalent_usd"], t["cost_unknown_events"]) if t["cost_unknown_events"] < t["events"] else "unknown / no priced observations"}',
+            f'Estimated PAYG: {money(t["payg_usd"], t["cost_unknown_events"]) if not t["events"] or t["cost_unknown_events"] < t["events"] else "unknown / no priced observations"}',
+            f'Subscription API-equivalent: {money(t["subscription_equivalent_usd"], t["cost_unknown_events"]) if not t["events"] or t["cost_unknown_events"] < t["events"] else "unknown / no priced observations"}',
+            f'Unknown billing mode API-equivalent: {money(t["unknown_mode_equivalent_usd"], t["cost_unknown_events"]) if not t["events"] or t["cost_unknown_events"] < t["events"] else "unknown / no priced observations"}',
             f'Cost unknown: {t["cost_unknown_events"]} events | Cache unknown: {t["cache_unknown_events"]} events',
             'Coverage: local retained logs only; non-token charges unknown; estimates are not bills.']
     if not rows:
@@ -300,7 +325,7 @@ def lines(db, filters, rates, group='model', scan_result=None):
     text += ['', f'{group.upper():36} {"INPUT":>12} {"OUTPUT":>12} {"API EQ USD*":>14} {"EVENTS":>8}']
     items_list = list(groups.items())
     if filters.get('sort') == 'estimated-cost':
-        items_list.sort(key=lambda pair: sum((estimate(r, rates)[0] or Decimal(0) for r in pair[1]), Decimal(0)), reverse=True)
+        items_list.sort(key=lambda pair: equivalent_usd(totals(pair[1], rates)), reverse=True)
     else:
         items_list.sort()
     for label, items in items_list:
@@ -320,14 +345,9 @@ def lines(db, filters, rates, group='model', scan_result=None):
         text += [f'Run summaries: {summary_count} comparison records excluded from event totals; run doctor for reconciliation.']
     text += ['', 'MANUAL ACCOUNT OBSERVATIONS (separate scope/currency; never subtracted from local estimates)']
     text += [f'{r["period_start"]}..{r["period_end"]} {r["currency"]} {r["amount"]} {r["kind"]} scope={r["scope"]}' for r in observations] or ['Not entered']
-    threshold = db.execute("SELECT value FROM settings WHERE key='monthly_usd'").fetchone()
-    if threshold:
-        monthly = totals(query(db, {'period':'month'}), rates)
-        observed = monthly['payg_usd'] + monthly['subscription_equivalent_usd'] + monthly['unknown_mode_equivalent_usd']
-        text += [f'Local month API-equivalent warning threshold: USD {threshold[0]} (NOT a spend cap)']
-        levels_row = db.execute("SELECT value FROM settings WHERE key='alert_levels'").fetchone()
-        levels = json.loads(levels_row[0]) if levels_row else [50,80,100]
-        crossed = [level for level in levels if observed >= Decimal(threshold[0]) * Decimal(level) / 100]
-        if crossed:
-            text.append(f'WARNING: crossed {max(crossed)}% level; month known API-equivalent subtotal USD {observed:.6f}; threshold USD {threshold[0]}')
+    from .alerts import status
+    for alert in status(db, rates):
+        if alert['level'] in ('warning', 'exceeded'):
+            text.append(f'WARNING: {alert["label"]}: USD {alert["spent_usd"]:.2f} of {alert["limit_usd"]} '
+                        f'({alert["percent"]}%) since {alert["window_start"]} (NOT a spend cap)')
     return text

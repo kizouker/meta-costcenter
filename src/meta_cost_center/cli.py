@@ -11,7 +11,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from .collector import scan
-from .reports import bounds, estimate, lines, load_prices, query, reconciliation
+from . import alerts
+from .reports import bounds, estimate, lines, load_prices, query, reconciliation, with_local_rates
 from .store import connect
 
 
@@ -96,6 +97,7 @@ def main():
         if args.command not in ('reconcile','alert'):
             bounds(filters)
         db = connect(getattr(args,'db',config.get('db',data/'meta-cost-center/costs.sqlite3')))
+        rates = with_local_rates(db, rates)
         if args.command == 'reconcile':
             if args.action == 'add':
                 if args.amount is None:
@@ -117,10 +119,10 @@ def main():
             levels = sorted(set(int(x) for x in args.at.split(',')))
             if not levels or any(x <= 0 or x > 100 for x in levels):
                 raise ValueError('Warning percentages must be between 1 and 100')
-            with db:
-                db.execute("INSERT OR REPLACE INTO settings VALUES ('monthly_usd',?)",(value,))
-                db.execute("INSERT OR REPLACE INTO settings VALUES ('alert_levels',?)",(json.dumps(levels),))
-            print(f'Local API-equivalent monthly warning set to USD {value}. This is not a spend cap.')
+            below = [x for x in levels if x < 100][:alerts.MAX_WARNINGS]
+            alerts.create(db, {'period': 'month', 'limit_usd': value, 'warn_levels': below or [80]})
+            print(f'Local API-equivalent monthly alert added: USD {value}. This is not a spend cap. '
+                  'Manage alerts on the dashboard Alerts page.')
             return
         if args.command == 'show':
             from .webapp import run
@@ -148,11 +150,11 @@ def main():
                 rows = query(db,filters)
                 output = []
                 for r in rows:
-                    value, snapshot = estimate(r,rates)
+                    value, snapshot, assumed = estimate(r,rates)
                     # Exports deliberately omit source paths.
                     output.append({k:v for k,v in r.items() if k!='source'} | {
                         'estimated_api_equivalent_usd':str(value) if value is not None else None,
-                        'pricing_snapshot':snapshot})
+                        'pricing_snapshot':snapshot, 'rate_assumed':assumed})
                 if args.format=='json':
                     print(json.dumps(output,indent=2))
                 elif output:

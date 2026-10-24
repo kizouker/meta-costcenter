@@ -155,6 +155,90 @@ def main():
                 expect(page).to_have_url(base + '/projects/Website')
                 expect(page.locator('#session-count')).to_have_text('2')
                 expect(page.locator('#input')).to_have_text('151,234')
+                # Chart toggle: cost by default, tokens on request.
+                page.locator('.nav', has_text='Overview').click()
+                expect(page.locator('#chart')).to_have_attribute('aria-label', 'Estimated cost by day')
+                page.locator('[data-metric=tokens]').click()
+                expect(page.locator('#chart')).to_have_attribute('aria-label', 'Token usage by day')
+                page.locator('[data-metric=cost]').click()
+                # Alerts: a tiny daily limit is exceeded at once and raises the banner on every page.
+                # A stub records desktop notifications, as if permission had been granted.
+                page.evaluate('''() => { window.__notes = []; window.Notification = class {
+                    static permission = 'granted'; static requestPermission() { return Promise.resolve('granted'); }
+                    constructor(title) { window.__notes.push(title); } }; }''')
+                page.locator('.nav', has_text='Alerts').click()
+                expect(page.locator('#notification-state')).to_contain_text('notifications are on')
+                expect(page.get_by_role('button', name='Filters', exact=True)).to_have_count(0)
+                # The form opens in a modal; Escape closes it without saving.
+                page.locator('#add-alert').click()
+                expect(page.get_by_role('dialog', name='Add alert')).to_be_visible()
+                page.keyboard.press('Escape')
+                expect(page.get_by_role('dialog')).to_have_count(0)
+                expect(page.locator('#add-alert')).to_be_focused()
+                page.locator('#add-alert').click()
+                # Warning 1 is always on; extra warnings are disabled until their box is checked.
+                expect(page.locator('#warning-1')).to_be_disabled()
+                page.get_by_label('Use warning 2').check()
+                expect(page.locator('#warning-1')).to_be_enabled()
+                page.locator('#warning-1').fill('60')
+                page.locator('#alert-form [name=limit_usd]').fill('0.01')
+                page.locator('#alert-form').get_by_role('button', name='Add alert').click()
+                expect(page.get_by_role('dialog')).to_have_count(0)
+                expect(page.locator('#alert-rows li')).to_have_count(1)
+                expect(page.locator('#alert-rows')).to_contain_text('Daily limit for all projects')
+                expect(page.locator('#alert-rows')).to_contain_text('warns at 60%, 80%')
+                expect(page.locator('#alert-banner')).to_contain_text('Cost limit exceeded')
+                page.locator('.nav', has_text='Sessions').click()
+                expect(page.locator('#alert-banner')).to_be_visible()
+                page.wait_for_function('window.__notes.length === 1')
+                page.wait_for_timeout(2500)  # later polls must not notify again for the same window and level
+                assert page.evaluate('window.__notes') == ['Muse Cost: limit exceeded']
+                page.locator('.nav', has_text='Alerts').click()
+                # Edit opens the same modal pre-filled; saving updates the alert in place.
+                page.get_by_role('button', name='Edit').click()
+                expect(page.get_by_role('dialog', name='Edit alert')).to_be_visible()
+                expect(page.locator('#alert-form [name=limit_usd]')).to_have_value('0.01')
+                expect(page.locator('#warning-0')).to_have_value('60')
+                expect(page.get_by_label('Use warning 2')).to_be_checked()
+                expect(page.get_by_label('Use warning 3')).not_to_be_checked()
+                page.locator('#alert-form [name=period]').select_option('week')
+                page.get_by_role('button', name='Save alert').click()
+                expect(page.locator('#alert-rows')).to_contain_text('Weekly limit for all projects')
+                expect(page.locator('#alert-rows li')).to_have_count(1)
+                page.get_by_role('button', name='Pause').click()
+                expect(page.locator('#alert-banner')).to_have_count(0, timeout=5000)
+                # Preview shows a sample bar without saving anything; it can be ended at once.
+                page.locator('#preview-warning').click()
+                expect(page.locator('#alert-banner')).to_contain_text('Preview')
+                expect(page.locator('#alert-banner')).to_contain_text('Approaching a cost limit')
+                page.get_by_role('button', name='End preview').click()
+                expect(page.locator('#alert-banner')).to_have_count(0)
+                page.locator('#test-notification').click()
+                assert page.evaluate('window.__notes')[-1] == 'Muse Cost: test notification'
+                page.once('dialog', lambda dialog: dialog.accept())
+                page.get_by_role('button', name='Delete').click()
+                expect(page.locator('#alert-rows li')).to_have_count(0)
+                # Project pages offer a pre-filled alert for that project.
+                page.goto(base + '/projects/Research')
+                page.get_by_role('link', name='Add alert for this project →').click()
+                expect(page.get_by_role('dialog', name='Add alert')).to_be_visible()
+                expect(page.locator('#alert-form [name=project]')).to_have_value('Research')
+                page.get_by_role('button', name='Cancel').click()
+                page.reload()
+                expect(page.locator('#add-alert')).to_be_visible()
+                expect(page.get_by_role('dialog')).to_have_count(0)  # the pre-filled dialog opens once, not on refresh
+                # Pricing: a local rate overrides the public one and changes the estimate at once.
+                page.locator('.nav', has_text='Pricing').click()
+                row = page.locator('#pricing-rows tr', has_text='muse-spark-1.3')
+                expect(row).to_contain_text('Public rate')
+                row.get_by_role('button', name='Override').click()
+                for name in ('input_per_million', 'cached_input_per_million', 'output_per_million'):
+                    page.locator(f'.rate-form [name={name}]').fill('0')
+                page.get_by_role('button', name='Save local rate').click()
+                expect(row).to_contain_text('Local rate')
+                expect(row).to_contain_text('$0.00')
+                row.get_by_role('button', name='Remove').click()
+                expect(row).to_contain_text('Public rate')
                 page.locator('.nav', has_text='Overview').click()
                 expect(page.locator('#input')).to_have_text('301,234')
                 page.screenshot(path='/tmp/muse-cost-react-overview.png', full_page=True)
@@ -181,9 +265,13 @@ def main():
                 expect(page).to_have_url(base + '/sessions')
                 page.goto(base + '/sessions/no-such-session')
                 expect(page.get_by_role('heading', name='Session not found')).to_be_visible()
+                # A period with no usage costs $0.00, not "Unknown".
+                page.goto(base + '/?period=all&from=2000-01-01&to=2000-01-02')
+                expect(page.locator('#cost')).to_have_text('$0.00')
+                expect(page.locator('#daily-cost')).to_have_text('$0.00')
                 assert not errors, errors
                 browser.close()
-                print('React browser checks passed: clean URLs, client navigation, state persistence, filters, filter chips, session and project drill-down, subagent tree, live updates, export, tooltips, history, mobile, legacy URLs.')
+                print('React browser checks passed: clean URLs, client navigation, state persistence, filters, filter chips, session and project drill-down, subagent tree, cost chart, alerts, banner, notifications, local pricing, live updates, export, tooltips, history, mobile, legacy URLs.')
         finally:
             server.shutdown()
             server.server_close()

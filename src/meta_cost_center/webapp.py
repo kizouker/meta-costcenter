@@ -14,15 +14,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from . import alerts, pricing
 from .collector import scan
 from .reports import (NotFound, bounds, equivalent_usd, estimate, grouped, project_detail, projects, query,
-                      session_detail, sessions, timeline, totals, with_estimates)
+                      session_detail, sessions, timeline, totals, with_estimates, with_local_rates)
 from .store import connect
 
 FILTERS = ('period', 'from', 'to', 'project', 'model', 'session', 'billing_mode')
 ASSETS = Path(__file__).with_name('web')
-PAGES = re.compile(r'/|/(?:breakdown|activity|sessions|projects)|/(?:sessions|projects)/[^/]+')
-API = re.compile(r'/api/(dashboard|export|sessions|projects)(?:/([^/]+))?')
+PAGES = re.compile(r'/|/(?:breakdown|activity|sessions|projects|pricing|alerts)|/(?:sessions|projects)/[^/]+')
+API = re.compile(r'/api/(dashboard|export|sessions|projects|pricing|alerts)(?:/([^/]+))?')
+MAX_BODY = 16 * 1024
 
 
 def report(db, filters, rates, status):
@@ -42,14 +44,13 @@ def report(db, filters, rates, status):
     summary_count = db.execute('SELECT COUNT(*) FROM summaries').fetchone()[0]
     if summary_count:
         warnings.append(f'{summary_count} run summary records are comparison-only and excluded from event totals.')
-    threshold = db.execute("SELECT value FROM settings WHERE key='monthly_usd'").fetchone()
     return {'filters': filters, 'totals': totals(rows, rates), 'month': totals(monthly, rates),
             'groups': groups, 'timeline': days, 'events': provenance,
             'session_count': len(session_rows),
             'top_sessions': sorted(session_rows, key=equivalent_usd, reverse=True)[:5],
             'top_projects': sorted(projects(db, filters, rates, rows), key=equivalent_usd, reverse=True)[:5],
             'options': options,
-            'monthly_warning_usd': threshold[0] if threshold else None,
+            'alerts': alerts.status(db, rates),
             'status': {**status, 'warnings': warnings, 'last_scan': source[0], 'pending_lines': source[2] or 0},
             'source_count': db.execute('SELECT COUNT(*) FROM sources').fetchone()[0]}
 
@@ -151,14 +152,18 @@ class Handler(BaseHTTPRequestHandler):
         defaults = {} if any(k in raw for k in FILTERS) else self.server.filters
         filters = {k: raw[k][-1] if k in raw else defaults.get(k) for k in FILTERS}
         filters['period'] = filters.get('period') or 'today'
-        rates = self.server.rates
         db = None
         try:
             bounds(filters)
             if filters.get('billing_mode') not in (None, '', 'payg', 'subscription', 'unknown'):
                 raise ValueError('Invalid billing mode')
-            db = sqlite3.connect(self.server.db_path, timeout=10)
-            db.row_factory = sqlite3.Row
+            db = self.database()
+            # Local rates are read on every request so edits on the Pricing page apply at once.
+            rates = with_local_rates(db, self.server.rates)
+            if endpoint == 'pricing' and not key:
+                return self.send(200, pricing.table(db, rates))
+            if endpoint == 'alerts' and not key:
+                return self.send(200, alerts.status(db, rates))
             if endpoint == 'sessions':
                 return self.send(200, session_detail(db, key, filters, rates) if key else sessions(db, filters, rates))
             if endpoint == 'projects':
@@ -168,9 +173,9 @@ class Handler(BaseHTTPRequestHandler):
             if endpoint == 'export':
                 rows = [{k: v for k,v in r.items() if k != 'source'} for r in query(db, filters)]
                 for r in rows:
-                    value, snapshot = estimate(r, rates)
+                    value, snapshot, assumed = estimate(r, rates)
                     r.update(estimated_api_equivalent_usd=str(value) if value is not None else None,
-                             pricing_snapshot=snapshot)
+                             pricing_snapshot=snapshot, rate_assumed=assumed)
                 if raw.get('format') == ['csv']:
                     output = io.StringIO()
                     fields = list(rows[0]) if rows else ['id','session','model','input','output','cached']
@@ -193,13 +198,75 @@ class Handler(BaseHTTPRequestHandler):
             if db is not None:
                 db.close()
 
-    def do_POST(self):
+    def database(self):
+        db = sqlite3.connect(self.server.db_path, timeout=10)
+        db.row_factory = sqlite3.Row
+        return db
+
+    def body(self):
+        # A JSON content type cannot be sent cross-site without a CORS preflight, which is never approved.
+        if self.headers.get('Content-Type', '').split(';')[0].strip() != 'application/json':
+            raise UnsupportedMedia()
+        length = int(self.headers.get('Content-Length') or 0)
+        if length > MAX_BODY:
+            raise ValueError('Request body too large')
+        try:
+            return json.loads(self.rfile.read(length) or b'null')
+        except ValueError:
+            raise ValueError('Request body must be valid JSON') from None
+
+    def write(self, method):
         if not self.allowed():
             return self.send(403, {'error': 'Local dashboard requests only.'})
-        if self.path != '/api/refresh':
+        parsed = urlsplit(self.path)
+        if method == 'POST' and parsed.path == '/api/refresh':
+            self.server.refresh_event.set()
+            return self.send(202, {'scanning': True})
+        route = API.fullmatch(parsed.path)
+        endpoint, key = (route.group(1), unquote(route.group(2)) if route.group(2) else None) if route else (None, None)
+        handlers = {('POST', 'alerts', False): lambda db: (201, {'id': alerts.create(db, self.body())}),
+                    ('PUT', 'alerts', True): lambda db: (200, alerts.update(db, alert_id(key), self.body())),
+                    ('DELETE', 'alerts', True): lambda db: (200, alerts.delete(db, alert_id(key))),
+                    ('PUT', 'pricing', True): lambda db: (200, pricing.set_local(db, key, self.body())),
+                    ('DELETE', 'pricing', True): lambda db: (200, pricing.delete_local(db, key))}
+        handler = handlers.get((method, endpoint, key is not None))
+        if not handler:
             return self.send(404, {'error': 'Not found'})
-        self.server.refresh_event.set()
-        self.send(202, {'scanning': True})
+        db = None
+        try:
+            db = self.database()
+            code, result = handler(db)
+            return self.send(code, result if result is not None else {'ok': True})
+        except UnsupportedMedia:
+            return self.send(415, {'error': 'Send JSON with Content-Type: application/json.'})
+        except NotFound as error:
+            return self.send(404, {'error': str(error)})
+        except ValueError as error:
+            return self.send(400, {'error': str(error)})
+        except sqlite3.Error:
+            return self.send(503, {'error': 'Usage database temporarily unavailable; try again shortly.'})
+        finally:
+            if db is not None:
+                db.close()
+
+    def do_POST(self):
+        self.write('POST')
+
+    def do_PUT(self):
+        self.write('PUT')
+
+    def do_DELETE(self):
+        self.write('DELETE')
+
+
+class UnsupportedMedia(Exception):
+    pass
+
+
+def alert_id(key):
+    if not key.isdigit():
+        raise NotFound(f'Unknown alert: {key}')
+    return int(key)
 
 
 def open_browser(url):

@@ -95,6 +95,8 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(t['payg_usd'],0)
         self.assertEqual(query(self.db,{'period':'all','model':'missing'}),[])
         self.assertIn('Not entered','\n'.join(lines(self.db,{'period':'all'},self.rates)))
+        empty='\n'.join(lines(self.db,{'period':'all','from':'2000-01-01','to':'2000-01-02'},self.rates))
+        self.assertIn('Estimated PAYG: USD 0.000000',empty)  # no usage costs nothing; it is not unknown
     def test_native_metadata_survives_incremental_scan(self):
         self.write({'payload_type':'runtime.session.metadata','payload':{'record':{
             'workspace_root':'/private/work/demo','model_id':'test-model'}}})
@@ -169,5 +171,85 @@ class DrillDownTests(unittest.TestCase):
         self.assertEqual(detail['totals']['input'],listed['unassigned']['input'])
         self.assertEqual(len(detail['sessions']),3)
         with self.assertRaises(NotFound):project_detail(self.db,'missing',{'period':'all'},self.rates)
+
+class PricingAndAlertTests(unittest.TestCase):
+    write=CollectorTests.write
+    scan=CollectorTests.scan
+    tearDown=CollectorTests.tearDown
+    def setUp(self):
+        CollectorTests.setUp(self)
+        self.write(event())                                    # test-model: priced
+        self.write(event('private-event','private',100,model='secret-model'),self.logs/'private/session.jsonl')
+        self.scan()
+    def rates_from(self,day):
+        return [dict(self.rates[0],effective_from=day)]
+    def test_back_pricing_is_assumed(self):
+        from meta_cost_center.reports import estimate
+        row=query(self.db,{'period':'all','model':'test-model'})[0]
+        value,snapshot,assumed=estimate(row,self.rates_from('2999-01-01'))
+        self.assertEqual((value,assumed),(Decimal('0.000102'),True))
+        self.assertFalse(estimate(row,self.rates)[2])
+        t=totals(query(self.db,{'period':'all'}),self.rates_from('2999-01-01'))
+        self.assertEqual((t['cost_assumed_events'],t['cost_unknown_events']),(1,1))
+        self.assertEqual(t['priced_tokens'],110)
+    def test_local_rate_overrides_and_prices_unknown_models(self):
+        from meta_cost_center import pricing
+        from meta_cost_center.reports import with_local_rates
+        pricing.set_local(self.db,'secret-model',{'input_per_million':'2','cached_input_per_million':'1','output_per_million':'4'})
+        pricing.set_local(self.db,'test-model',{'input_per_million':'0','cached_input_per_million':'0','output_per_million':'0'})
+        rates=with_local_rates(self.db,self.rates)
+        t=totals(query(self.db,{'period':'all'}),rates)
+        self.assertEqual(t['cost_unknown_events'],0)
+        self.assertEqual(t['unknown_mode_equivalent_usd'],Decimal('0.00022'))
+        rows={m['model']:m for m in pricing.table(self.db,rates)}
+        self.assertEqual((rows['secret-model']['source'],rows['test-model']['source']),('local','local'))
+        self.assertEqual(with_local_rates(self.db,rates).count(rates[-1]),1)  # merging twice does not duplicate
+        pricing.delete_local(self.db,'secret-model')
+        self.assertEqual(pricing.table(self.db,with_local_rates(self.db,self.rates))[0]['source'],'missing')
+        with self.assertRaises(ValueError):pricing.set_local(self.db,'x',{'input_per_million':'-1'})
+        with self.assertRaises(NotFound):pricing.delete_local(self.db,'secret-model')
+    def test_alert_windows_scopes_and_levels(self):
+        from datetime import date
+        from meta_cost_center import alerts
+        self.assertEqual(alerts.window('week',date(2026,10,24)),(date(2026,10,19),date(2026,10,24)))
+        self.assertEqual(alerts.window('month',date(2026,10,24))[0],date(2026,10,1))
+        self.db.execute("UPDATE events SET project='site'")
+        self.db.commit()
+        alerts.create(self.db,{'period':'day','limit_usd':'0.0001'})                        # spent 0.000102: exceeded
+        alerts.create(self.db,{'period':'week','project':'site','limit_usd':'0.00012','warn_levels':[90,50,80]})  # 85%: warning at 80
+        alerts.create(self.db,{'period':'month','project':'other','limit_usd':'1'})         # nothing spent
+        alerts.create(self.db,{'period':'month','billing_mode':'payg','limit_usd':'1','enabled':False})
+        levels=[a['level'] for a in alerts.status(self.db,self.rates)]
+        self.assertEqual(levels,['exceeded','warning','ok','paused'])
+        statuses=alerts.status(self.db,self.rates)
+        self.assertEqual((statuses[1]['warn_levels'],statuses[1]['warning_at']),([50,80,90],80))
+        first=statuses[0]
+        self.assertEqual((first['spent_usd'],first['unpriced_events']),(Decimal('0.000102'),1))
+        for bad in ({'period':'year','limit_usd':'1'},{'period':'day','limit_usd':'0'},{'period':'day','limit_usd':'x'},
+                    {'period':'day','limit_usd':'1','warn_levels':[100]},{'period':'day','limit_usd':'1','warn_levels':[]},
+                    {'period':'day','limit_usd':'1','warn_levels':[10,20,30,40,50]},{'period':'day','limit_usd':'1','warn_levels':[50,50]},
+                    {'period':'day','limit_usd':'1','billing_mode':'subscription'}):
+            with self.assertRaises(ValueError):alerts.validate(bad)
+        alerts.delete(self.db,1)
+        with self.assertRaises(NotFound):alerts.update(self.db,1,{'period':'day','limit_usd':'1'})
+    def test_single_warning_column_migrates_to_levels(self):
+        self.db.executescript('''DROP TABLE alerts;
+            CREATE TABLE alerts (id INTEGER PRIMARY KEY, period TEXT, project TEXT, billing_mode TEXT,
+              limit_usd TEXT, warn_percent INTEGER DEFAULT 80, enabled INTEGER DEFAULT 1, created_at TEXT);
+            INSERT INTO alerts (period, limit_usd, warn_percent) VALUES ('day', '5', 70);''')
+        self.db.close()
+        self.db=connect(self.root/'db.sqlite3')
+        from meta_cost_center import alerts
+        self.assertEqual(alerts.status(self.db,self.rates)[0]['warn_levels'],[70])
+        self.assertNotIn('warn_percent',{r[1] for r in self.db.execute('PRAGMA table_info(alerts)')})
+    def test_monthly_warning_migrates_to_alert(self):
+        self.db.execute("INSERT INTO settings VALUES ('monthly_usd','30')")
+        self.db.execute("INSERT INTO settings VALUES ('alert_levels','[50, 80, 100]')")
+        self.db.commit()
+        self.db.close()
+        self.db=connect(self.root/'db.sqlite3')
+        alert=dict(self.db.execute('SELECT * FROM alerts').fetchone())
+        self.assertEqual((alert['period'],alert['project'],alert['limit_usd'],alert['warn_levels']),('month',None,'30','[50, 80]'))
+        self.assertIsNone(self.db.execute("SELECT 1 FROM settings WHERE key='monthly_usd'").fetchone())
 
 if __name__=='__main__':unittest.main()

@@ -10,6 +10,8 @@
 
 The repository now contains the Python package, executable `./muse-cost`, live browser dashboard, incremental SQLite collector, shared filtered reports, versioned token pricing, exports, local warnings, and manual account observations. See [README.md](../README.md) for usage and limitations.
 
+**Cost update — 2026-10-24:** Cost-first overview with a cost-over-time chart, assumed back-pricing, local rates for models without public pricing (stored only in the local database), and day/week/month alerts per project with a dashboard banner and desktop notifications. See [COST-AND-ALERTS.md](COST-AND-ALERTS.md).
+
 **Drill-down update — 2026-10-24:** The dashboard now has Sessions, session detail, Projects, and project detail pages with a subagent tree, per-model split, and provenance log, which addresses the session drill-down criterion below. See [UI-DRILLDOWN.md](UI-DRILLDOWN.md).
 
 Validation includes synthetic append/partial-line/replacement/subagent fixtures, terminal and browser interaction tests, and importing retained local Muse 1.4.12 logs. The test suite covers collection, reporting, browser-server routing, live refresh, and filter persistence. A live paid Muse run has not been generated for validation. Upstream `run.usage` schema capture, benchmark compatibility integration, and historical pricing effective dates remain open; native retained logs provide the headless fallback. Do not treat this checkpoint as completion of every acceptance criterion below.

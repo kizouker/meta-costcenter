@@ -1,7 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router';
-import { BILLING_MODES, EMPTY, compact, cost, dateTime, duration, equivalent, number, percent, periodLabel, shortId, tokens } from './format.js';
+import { BILLING_MODES, EMPTY, compact, cost, coverage, dateTime, duration, equivalent, number, percent, periodLabel, shortId, tokens } from './format.js';
 
 export function HeadingHelp({ children, text, id, icon = false, label, onClick, disabled, buttonId }) {
   const tooltipId = useId();
@@ -42,7 +42,11 @@ export function HeadingHelp({ children, text, id, icon = false, label, onClick, 
   </>;
 }
 
-export function Filters({ filters, setFilters, options, onClose }) {
+/**
+ * Opens a <dialog> as a modal while mounted: locks page scroll, and restores focus on close.
+ * Returns props that close it on Escape or a click on the backdrop.
+ */
+export function useModalDialog(onClose) {
   const dialog = useRef(null);
   useEffect(() => {
     const previousFocus = document.activeElement;
@@ -52,15 +56,26 @@ export function Filters({ filters, setFilters, options, onClose }) {
     element.showModal();
     return () => { element.close(); document.body.style.overflow = previousOverflow; previousFocus?.focus(); };
   }, []);
+  return {
+    ref: dialog,
+    onCancel: event => { event.preventDefault(); onClose(); },
+    onClick: event => {
+      if (event.target !== dialog.current) return;
+      const r = dialog.current.getBoundingClientRect();
+      if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) onClose();
+    },
+  };
+}
+
+export function Filters({ filters, setFilters, options, onClose }) {
+  const modal = useModalDialog(onClose);
   const change = event => {
     const { name, value } = event.target;
     setFilters(previous => ({ ...previous, [name]: value }));
   };
   const textFilter = (name, label, placeholder) => <label>{label}<input name={name} list={name + '-options'} value={filters[name]} onChange={change} placeholder={placeholder} autoComplete="off" />
     <datalist id={name + '-options'}>{(options?.[name] || []).map(value => <option key={value} value={value} />)}</datalist></label>;
-  return <dialog ref={dialog} id="filter-sidebar" className="filter-sidebar" aria-labelledby="filter-title"
-    onCancel={event => { event.preventDefault(); onClose(); }}
-    onClick={event => { if (event.target === dialog.current) { const r = dialog.current.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) onClose(); } }}>
+  return <dialog {...modal} id="filter-sidebar" className="filter-sidebar" aria-labelledby="filter-title">
     <div className="filter-sidebar-heading"><h2 id="filter-title">Filters</h2><button type="button" aria-label="Close filters" onClick={onClose}>×</button></div>
     <form id="filters" className="filters" onSubmit={event => event.preventDefault()}>
       <label>Period<select name="period" value={filters.period} onChange={event => setFilters(previous => ({ ...previous, period: event.target.value, from: '', to: '' }))}>
@@ -105,7 +120,8 @@ function chartLabel(key, unit, index, points) {
   const sameDay = points.every(point => point.bucket.slice(0, 10) === points[0].bucket.slice(0, 10));
   return sameDay || (index > 0 && points[index - 1].bucket.slice(0, 10) === key.slice(0, 10)) ? key.slice(11) : key.slice(5, 10) + ' ' + key.slice(11);
 }
-export function UsageChart({ timeline, unit = 'day' }) {
+/** Stacked input/output token bars, or estimated cost bars with unpriced periods marked. */
+export function UsageChart({ timeline, unit = 'day', metric = 'tokens' }) {
   const container = useRef(null);
   const [width, setWidth] = useState(600);
   useLayoutEffect(() => {
@@ -113,32 +129,55 @@ export function UsageChart({ timeline, unit = 'day' }) {
     observer.observe(container.current);
     return () => observer.disconnect();
   }, []);
-  const max = Math.max(...timeline.map(point => point.input + point.output), 1);
+  const isCost = metric === 'cost';
+  const max = Math.max(...timeline.map(point => isCost ? equivalent(point) : point.input + point.output), isCost ? 0.01 : 1);
+  const axis = value => isCost ? '$' + (max < 10 ? value.toFixed(2) : compact(value)) : compact(value);
   const step = (width - 80) / Math.max(timeline.length, 1), bar = Math.max(1, Math.min(24, step * .55));
-  return <div ref={container} id="chart" className="chart" role="img" aria-label={`Token usage by ${unit}`}>
+  return <div ref={container} id="chart" className="chart" role="img" aria-label={`${isCost ? 'Estimated cost' : 'Token usage'} by ${unit}`}>
     {!timeline.length ? <span>No observed usage in this date range.</span> : <svg viewBox={`0 0 ${width} 205`} role="presentation">
-      {[0, 1, 2, 3].map(i => <g key={i}><line x1="68" y1={16 + i * 49} x2={width - 8} y2={16 + i * 49} stroke="#b8c1cd" strokeDasharray="3 4" /><text x="60" y={22 + i * 49} textAnchor="end">{compact(max * (1 - i / 3))}</text></g>)}
+      {[0, 1, 2, 3].map(i => <g key={i}><line x1="68" y1={16 + i * 49} x2={width - 8} y2={16 + i * 49} stroke="#b8c1cd" strokeDasharray="3 4" /><text x="60" y={22 + i * 49} textAnchor="end">{axis(max * (1 - i / 3))}</text></g>)}
       {timeline.map((point, i) => {
-        const x = 70 + step * (i + .5) - bar / 2, input = point.input / max * 147, output = point.output / max * 147;
-        return <g key={point.bucket}><rect x={x} y={163 - input} width={bar} height={input} fill="#005c45" rx="2"><title>{point.bucket.replace('T', ' ')}: {number(point.input)} input, {number(point.output)} output</title></rect><rect x={x} y={163 - input - output} width={bar} height={output} fill="#bb6c00" rx="1" />
-          {(timeline.length <= 7 || i % Math.ceil(timeline.length / 6) === 0 || i === timeline.length - 1) && <text x={x + bar / 2} y="190" textAnchor="middle">{chartLabel(point.bucket, unit, i, timeline)}</text>}</g>;
+        const x = 70 + step * (i + .5) - bar / 2, label = point.bucket.replace('T', ' ');
+        const tick = (timeline.length <= 7 || i % Math.ceil(timeline.length / 6) === 0 || i === timeline.length - 1) && <text x={x + bar / 2} y="190" textAnchor="middle">{chartLabel(point.bucket, unit, i, timeline)}</text>;
+        if (isCost) {
+          const height = equivalent(point) / max * 147, unpriced = point.cost_unknown_events > 0;
+          return <g key={point.bucket} className="cost-bar"><rect x={x} y={163 - height} width={bar} height={height} fill="#005c45" rx="2">
+            <title>{label}: {cost(point)}{unpriced ? ` · ${number(point.cost_unknown_events)} completions unpriced` : ''}</title></rect>
+            {unpriced && <circle cx={x + bar / 2} cy={163 - height - 7} r="3.5" fill="#bb6c00"><title>{label}: {number(point.cost_unknown_events)} completions have no rate</title></circle>}{tick}</g>;
+        }
+        const input = point.input / max * 147, output = point.output / max * 147;
+        return <g key={point.bucket}><rect x={x} y={163 - input} width={bar} height={input} fill="#005c45" rx="2"><title>{label}: {number(point.input)} input, {number(point.output)} output</title></rect><rect x={x} y={163 - input - output} width={bar} height={output} fill="#bb6c00" rx="1" />{tick}</g>;
       })}
     </svg>}
   </div>;
 }
-export function ChartPanel({ timeline, unit = 'day', title = 'Usage over time' }) {
-  return <article className="panel"><div className="panel-heading"><div><h2>{title}</h2><p>Measured tokens by local {unit === 'hour' ? 'hour' : 'calendar day'}</p></div><div className="legend"><span className="dot input-dot" />Input<span className="dot output-dot" />Output</div></div><UsageChart timeline={timeline} unit={unit} /></article>;
+export function ChartPanel({ timeline, unit = 'day' }) {
+  const [metric, setMetric] = useState(() => { try { return localStorage.getItem('muse-cost.chart') || 'cost'; } catch { return 'cost'; } });
+  function choose(value) { setMetric(value); try { localStorage.setItem('muse-cost.chart', value); } catch { /* Storage may be disabled. */ } }
+  const isCost = metric === 'cost', period = unit === 'hour' ? 'hour' : 'calendar day';
+  return <article className="panel"><div className="panel-heading"><div><h2>{isCost ? 'Cost over time' : 'Usage over time'}</h2>
+    <p>{isCost ? `Estimated API-equivalent USD by local ${period}` : `Measured tokens by local ${period}`}</p></div>
+    <div className="chart-controls">
+      <div className="tabs" role="group" aria-label="Chart shows">{[['cost', 'Cost'], ['tokens', 'Tokens']].map(([key, label]) => <button key={key} type="button" data-metric={key} className={metric === key ? 'selected' : ''} aria-pressed={metric === key} onClick={() => choose(key)}>{label}</button>)}</div>
+      <div className="legend">{isCost ? <><span className="dot input-dot" />Estimated<span className="dot output-dot" />Has unpriced usage</> : <><span className="dot input-dot" />Input<span className="dot output-dot" />Output</>}</div>
+    </div></div><UsageChart timeline={timeline} unit={unit} metric={metric} /></article>;
 }
 
 export function Metric({ label, icon, id, value, description, descriptionId, accent, to }) {
   const body = <><div className="metric-label">{label}<span aria-hidden="true">{icon}</span></div><strong id={id}>{value}</strong><div id={descriptionId}>{description}</div></>;
   return to ? <Link className={'metric metric-link' + (accent ? ' accent' : '')} to={to}>{body}</Link> : <article className={'metric' + (accent ? ' accent' : '')}>{body}</article>;
 }
+export function CostMetric({ totals }) {
+  const covered = coverage(totals);
+  return <Metric label="Estimated cost" icon="$" id="cost" value={cost(totals)} descriptionId="cost-label"
+    description={!totals.events ? 'No usage in this period' : covered >= 99.95 ? 'All usage priced · API-equivalent USD'
+      : <>{covered.toFixed(1)}% of tokens priced · <Link className="inline-link" to="/pricing">set missing rates</Link></>} />;
+}
 export function TotalsMetrics({ totals, extra }) {
   return <section className="metrics" aria-label="Usage totals">
+    <CostMetric totals={totals} />
     <Metric label="Input tokens" icon="↗" id="input" value={number(totals.input)} descriptionId="cached-label" description={`${number(totals.cached)} cached${totals.cache_unknown_events ? ` · ${totals.cache_unknown_events} cache counts unknown` : ''}`} />
     <Metric label="Output tokens" icon="↙" id="output" value={number(totals.output)} descriptionId="events-label" description={`${number(totals.events)} observed model completions`} />
-    <Metric label="API-equivalent estimate" icon="$" id="cost" value={cost(totals)} descriptionId="cost-label" description={totals.cost_unknown_events ? `${number(totals.cost_unknown_events)} observations have unknown cost` : 'Token-only estimate · USD'} />
     {extra}
   </section>;
 }
@@ -170,7 +209,7 @@ export function SessionsTable({ sessions, id = 'session-rows', empty = 'No sessi
   const rows = apply(sessions, (row, key) => SESSION_SORT[key](row)).slice(0, limit);
   return <div className="table-wrap"><table className="sessions-table"><thead><tr>
     <th scope="col">Session</th>{header('last_activity', 'Last activity')}<th scope="col">Models</th>
-    {header('tokens', 'Input / output')}{header('cost', 'Est. cost', 'API-equivalent estimate in USD; not a billed charge')}{header('subagents', 'Subagents')}
+    {header('tokens', 'Input / output')}{header('cost', 'Est. cost', 'API-equivalent estimate in USD; not a billed charge. ≈ assumed rate, + partly unpriced')}{header('subagents', 'Subagents')}
   </tr></thead><tbody id={id}>
     {!rows.length && <EmptyRow columns={6}>{empty}</EmptyRow>}
     {rows.map(row => <tr key={row.id} className="clickable" onClick={event => { if (!event.target.closest('a')) navigate('/sessions/' + encodeURIComponent(row.id)); }}>

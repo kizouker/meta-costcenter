@@ -6,11 +6,16 @@ export const number = value => Number(value || 0).toLocaleString();
 export const compact = value => Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value || 0));
 export const equivalent = t => Number(t.payg_usd) + Number(t.subscription_equivalent_usd) + Number(t.unknown_mode_equivalent_usd);
 export const tokens = t => t.input + t.output;
+export const usd = value => '$' + Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: Number(value) && Math.abs(value) < 1 ? 4 : 2 });
+/** "≈" marks rates assumed before their verified date; "+" marks usage that could not be priced. */
 export function cost(t, key) {
-  if (!t.events || t.cost_unknown_events === t.events) return 'Unknown';
+  // No usage costs nothing; only usage that exists but has no rate is unknown.
+  if (t.events && t.cost_unknown_events === t.events) return 'Unknown';
   const value = key ? Number(t[key]) : equivalent(t);
-  return '$' + value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + (t.cost_unknown_events ? ' +' : '');
+  return (t.cost_assumed_events ? '≈' : '') + usd(value) + (t.cost_unknown_events ? ' +' : '');
 }
+export const coverage = t => tokens(t) ? t.priced_tokens / tokens(t) * 100 : 100;
+export const COST_NOTE = '“≈” means some usage was priced with a public rate applied before its verified date. “+” means some usage has no rate and is excluded.';
 // UUIDv7 session IDs share a time-based prefix, so keep the random tail too.
 export const shortId = id => id && id.length > 14 ? id.slice(0, 8) + '…' + id.slice(-4) : id;
 export function dateTime(value) {
