@@ -1,0 +1,8 @@
+# Copy to ~/.config/meta-cost-center/config.toml and edit for your machine.
+# sources = ["~/.local/share/muse/sessions"]
+# prices = "/absolute/path/to/your/versioned-prices.json"
+
+# Explicit labels override native workspace names. Billing mode defaults to unknown.
+[sessions."replace-with-session-id"]
+project = "my-project"
+billing_mode = "subscription" # subscription, payg, or unknown

@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+*.sqlite3*
+
+node_modules/
+
+# Usage exports contain model and project names
+muse-usage.json
+muse-usage.csv
+*.jsonl
