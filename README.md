@@ -369,3 +369,4 @@ the dashboard loads nothing from a CDN at runtime. Dependency versions are pinne
 
 Design notes and the intended scope are in the [plans](plans/) directory, starting with
 [plans/PLAN.md](plans/PLAN.md).
+
