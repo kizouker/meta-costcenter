@@ -1,12 +1,10 @@
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-build/
-dist/
+/muse-cost
+/dist/
 *.sqlite3*
 
 node_modules/
+frontend/test-results/
+frontend/playwright-report/
 
 # Usage exports contain model and project names
 muse-usage.json

@@ -4,12 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "test:browser": "playwright test"
   },
   "dependencies": {
     "esbuild": "0.28.2",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "react-router": "7.18.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0"
   }
 }

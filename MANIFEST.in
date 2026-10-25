@@ -1,2 +1,0 @@
-include frontend/package.json frontend/package-lock.json frontend/build.mjs
-recursive-include frontend/src *.jsx *.js

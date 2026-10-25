@@ -8,7 +8,7 @@
 
 ## Implementation checkpoint — 2026-10-24
 
-The repository now contains the Python package, executable `./muse-cost`, live browser dashboard, incremental SQLite collector, shared filtered reports, versioned token pricing, exports, local warnings, and manual account observations. See [README.md](../README.md) for usage and limitations.
+The repository now contains the `muse-cost` Go binary (ported from the original Python implementation, which is kept on the `python` branch), live browser dashboard, incremental SQLite collector, shared filtered reports, versioned token pricing, exports, local warnings, and manual account observations. See [README.md](../README.md) for usage and limitations.
 
 **Cost update — 2026-10-24:** Cost-first overview with a cost-over-time chart, assumed back-pricing, local rates for models without public pricing (stored only in the local database), and day/week/month alerts per project with a dashboard banner and desktop notifications. See [COST-AND-ALERTS.md](COST-AND-ALERTS.md).
 

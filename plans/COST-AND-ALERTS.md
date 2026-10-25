@@ -31,7 +31,7 @@ The cost center exists to explain cost, but the dashboard currently leads with t
 
 ### 3.1 Rate sources
 
-1. **Public rates** stay in `src/meta_cost_center/pricing.json` (or the file named by
+1. **Public rates** stay in `pricing.json`, embedded in the binary, (or the file named by
    `prices` in `config.toml`). Only publicly documented models belong here.
 2. **Local rates** live in a new `rates` table in the local database:
    `model TEXT PRIMARY KEY, input_per_million, cached_input_per_million,

@@ -1,0 +1,23 @@
+version: 2
+
+builds:
+  - main: ./cmd/muse-cost
+    binary: muse-cost
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/omenking/meta-costcenter/internal/costcenter.Version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "muse-cost_{{ .Os }}_{{ .Arch }}"
+    files: [README.md, LICENSE]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github

@@ -4,7 +4,7 @@ import path from 'node:path';
 const root = path.dirname(fileURLToPath(import.meta.url));
 await build({
   entryPoints: [path.join(root, 'src/App.jsx')],
-  outfile: path.join(root, '../src/meta_cost_center/web/app.js'),
+  outfile: path.join(root, '../web/app.js'),
   bundle: true,
   minify: true,
   jsx: 'automatic',

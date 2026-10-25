@@ -13,9 +13,9 @@ stores them in a local SQLite database, and shows them in a dashboard in your br
 broken down by project, model, and session. You can also set spending alerts and record
 the amounts that actually appear on your bills.
 
-Everything runs locally. The tool needs no API key, no hosted service, and no Python
-packages beyond the standard library, and it never makes model calls of its own. It
-does not send your data anywhere.
+Everything runs locally. The tool is a single binary with the dashboard built into it, so
+it needs no API key, no hosted service, and no runtime to install, and it never makes
+model calls of its own. It does not send your data anywhere.
 
 The costs it shows are estimates, not bills. They are calculated from public per-token
 prices, so they leave out taxes, credits, non-token charges, and anything covered by a
@@ -23,19 +23,32 @@ subscription, and they cannot include usage that was never logged on this machin
 
 ## Requirements
 
-- Python 3.11 or newer
-- Linux or WSL
+- Linux or WSL, on amd64 or arm64
 - A web browser
 
-Node is needed only if you change the frontend code, because the built dashboard is
-already included in the repository.
+Go is needed only to build from source, and Node only if you change the frontend code,
+because the built dashboard is already included in the repository.
+
+## Install
+
+Install the latest release into `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/omenking/meta-costcenter/main/install.sh | sh
+```
+
+The script downloads the archive for your architecture, checks it against the release's
+checksums, and installs the `muse-cost` binary; set `MUSE_COST_INSTALL_DIR` to install it
+somewhere else. If Go is installed, `go install github.com/omenking/meta-costcenter/cmd/muse-cost@latest`
+builds the same binary into `~/go/bin` instead. Upgrading is a matter of running either
+command again, and the database and configuration carry over unchanged.
 
 ## Quick start
 
-From a checkout of this repository, run:
+Run:
 
 ```bash
-./muse-cost show
+muse-cost show
 ```
 
 This starts a local server and opens the dashboard at `http://127.0.0.1:8765/`. If that
@@ -51,35 +64,10 @@ other computers.
 Some useful variations:
 
 ```bash
-./muse-cost show --port 8766      # use a specific port
-./muse-cost show --port 0         # let the system pick a free port
-./muse-cost show --no-browser     # print the URL without opening a browser
+muse-cost show --port 8766      # use a specific port
+muse-cost show --port 0         # let the system pick a free port
+muse-cost show --no-browser     # print the URL without opening a browser
 ```
-
-## Installing the `muse-cost` command
-
-The `./muse-cost` script in the checkout works without installing anything. If you
-would rather have a `muse-cost` command available, install the package into a virtual
-environment:
-
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -e .
-```
-
-You can then run it either through the environment's path or by activating the
-environment first:
-
-```bash
-.venv/bin/muse-cost show
-
-# or
-source .venv/bin/activate
-muse-cost show
-```
-
-The install step downloads build tools from your Python package index, so it needs
-network access to that index.
 
 ## Using the dashboard
 
@@ -114,7 +102,7 @@ To see live updates without spending anything, run the demo, which writes synthe
 usage and prints a command to run in a second terminal:
 
 ```bash
-python3 examples/live_demo.py
+go run ./examples/live-demo
 ```
 
 ## Command-line reports
@@ -123,29 +111,29 @@ The dashboard is the main interface, but the same data is available as plain-tex
 reports. These are handy over SSH or in scripts.
 
 ```bash
-./muse-cost today                         # today's usage
-./muse-cost week                          # this week
-./muse-cost month                         # this month
-./muse-cost sessions --sort estimated-cost
-./muse-cost session SESSION_ID            # one session in detail
-./muse-cost projects
-./muse-cost models
-./muse-cost export --format csv --period month
-./muse-cost export --format json --period all
-./muse-cost scan                          # import new records without showing anything
-./muse-cost watch --interval 15           # reprint reports on an interval
-./muse-cost tui                           # interactive terminal dashboard
-./muse-cost doctor                        # check sources and setup
+muse-cost today                         # today's usage
+muse-cost week                          # this week
+muse-cost month                         # this month
+muse-cost sessions --sort estimated-cost
+muse-cost session SESSION_ID            # one session in detail
+muse-cost projects
+muse-cost models
+muse-cost export --format csv --period month
+muse-cost export --format json --period all
+muse-cost scan                          # import new records without showing anything
+muse-cost watch --interval 15           # reprint reports on an interval
+muse-cost tui                           # interactive terminal dashboard
+muse-cost doctor                        # check sources and setup
 ```
 
 Most commands accept the same filters, and when you pass them to `show` they set the
 dashboard's starting view:
 
 ```bash
-./muse-cost show --period month --interval 2
-./muse-cost show --project my-project --model muse-spark-1.3
-./muse-cost show --session SESSION_ID --period all
-./muse-cost show --from 2026-10-01 --to 2026-10-24 --billing-mode payg
+muse-cost show --period month --interval 2
+muse-cost show --project my-project --model muse-spark-1.3
+muse-cost show --session SESSION_ID --period all
+muse-cost show --from 2026-10-01 --to 2026-10-24 --billing-mode payg
 ```
 
 Filter values must match labels exactly, and multiple filters are combined, so
@@ -160,7 +148,7 @@ These options work with every command:
 - `--config PATH` uses a different configuration file.
 - `--prices PATH` adds a pricing file (see [Estimated costs](#estimated-costs)).
 
-Run `./muse-cost --help` or `./muse-cost COMMAND --help` for the full list.
+Run `muse-cost --help` or `muse-cost COMMAND --help` for the full list.
 
 ## Projects and billing modes
 
@@ -190,8 +178,8 @@ effect on the next scan, including for sessions that were imported earlier.
 Costs are estimated from a bundled snapshot of
 [Meta's published pricing](https://dev.meta.ai/docs/pricing-rate-limits), dated
 2026-10-24 and stored in
-[src/meta_cost_center/pricing.json](src/meta_cost_center/pricing.json). That file
-contains only publicly documented models.
+[pricing.json](pricing.json), which is built into the binary. That file contains only
+publicly documented models.
 
 The dashboard uses two markers on cost figures:
 
@@ -232,7 +220,7 @@ You can also create a monthly alert from the command line. The following command
 $30 monthly limit for all projects with warnings at 50% and 80%:
 
 ```bash
-./muse-cost alert set --monthly-usd 30 --at 50,80,100
+muse-cost alert set --monthly-usd 30 --at 50,80,100
 ```
 
 Alerts that have reached a warning level or their limit are also listed in the text
@@ -247,7 +235,7 @@ whose names start with `bootcamp-`, or `key1,key2` for specific keys. The same c
 from the command line:
 
 ```bash
-./muse-cost alert set --monthly-usd 30 --revoke-keys 'bootcamp-*'
+muse-cost alert set --monthly-usd 30 --revoke-keys 'bootcamp-*'
 ```
 
 Cost Center itself never deletes anything. Keyguard reads the alerts with the following
@@ -255,14 +243,14 @@ command, which imports any new usage first and prints every alert's level and ke
 JSON, and it acts on them only when its own Cost Center check is turned on:
 
 ```bash
-./muse-cost alert status --json
+muse-cost alert status --json
 ```
 
 The **Alerts** page shows what Keyguard is doing, which needs Cost Center to know how to run
 it. Add the path to your configuration file if `keyguard` is not on your `PATH`:
 
 ```toml
-keyguard_command = "/path/to/meta-keyguard/keyguard"
+keyguard_command = "/home/you/.local/bin/keyguard"
 ```
 
 With that set, each alert that revokes keys shows one of three things: the keys it covers
@@ -282,9 +270,9 @@ Instead, you can record what your account actually shows so that both numbers ar
 side by side:
 
 ```bash
-./muse-cost reconcile add --date 2026-10-24 --from 2026-10-01 --to 2026-10-24 \
+muse-cost reconcile add --date 2026-10-24 --from 2026-10-01 --to 2026-10-24 \
   --amount 12.34 --currency CAD --kind outstanding-balance --scope team
-./muse-cost reconcile list
+muse-cost reconcile list
 ```
 
 ## Where data is stored
@@ -329,31 +317,47 @@ whereas exports leave them out so that they are safe to share.
 
 ## Development
 
-### Running the tests
+### Building and testing
 
 ```bash
-python3 -m unittest discover -s tests -v
+go build -o muse-cost ./cmd/muse-cost   # embeds web/ and pricing.json into the binary
+go test ./...
 ```
 
-The tests cover log parsing, incremental imports, deduplication, pricing, privacy, the
-CLI, the terminal dashboard, the web server, live updates, filters, and exports. None of
-them make model calls.
+The tests cover log parsing, incremental imports, deduplication, pricing, alerts,
+database migrations, privacy, the Keyguard integration, the CLI, the terminal dashboard
+(driven through a pseudo-terminal), the web server, live updates, filters, and exports.
+None of them make model calls.
 
-Optional browser tests use Playwright and an installed copy of Chrome:
+Optional browser tests drive the dashboard in an installed copy of Google Chrome with
+Playwright. They build the binary with Go, or use the one named by `MUSE_COST`, and run it
+against a fixture of synthetic logs:
 
 ```bash
-python3 tests/browser_dashboard.py
+npm ci --prefix frontend
+npm run test:browser --prefix frontend
 ```
+
+Set `CHROME_PATH` to use a browser other than the installed Google Chrome.
+
+### Releases
+
+Releases are built by GoReleaser from `.goreleaser.yaml` (`goreleaser release` on a tag),
+which publishes the `muse-cost_linux_amd64.tar.gz` and `muse-cost_linux_arm64.tar.gz`
+archives that `install.sh` downloads. Changes to `web/` or `pricing.json` reach users
+only through a new binary, since both are embedded in it.
 
 ### Changing the frontend
 
 The dashboard is a React app. Its source is in `frontend/src/` (with pages in
-`frontend/src/pages/`), and its styles are in `src/meta_cost_center/web/style.css`.
-Since the server serves a prebuilt bundle, rebuild after changing any React code:
+`frontend/src/pages/`), and its styles are in `web/style.css`. Because the binary embeds
+a prebuilt bundle, `web/app.js`, rebuild the bundle after changing any React code and
+then rebuild the binary:
 
 ```bash
 npm ci --prefix frontend
 npm run build --prefix frontend
+go build -o muse-cost ./cmd/muse-cost
 ```
 
 The build uses esbuild and bundles React and React Router into a single local file, so
