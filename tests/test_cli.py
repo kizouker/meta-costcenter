@@ -47,6 +47,18 @@ class CLITests(unittest.TestCase):
         self.assertEqual(result.returncode,1)
         self.assertNotIn('Traceback',result.stderr)
 
+    def test_alert_status_json_reports_key_revocation(self):
+        self.command('alert','set','--monthly-usd','30','--revoke-keys','bootcamp-*, key1')
+        self.command('alert','set','--monthly-usd','40')
+        statuses=json.loads(self.command('alert','status','--json'))
+        self.assertEqual([(a['revoke_keys'],a['key_match']) for a in statuses],[(True,'bootcamp-*,key1'),(False,None)])
+        self.assertEqual(statuses[0]['level'],'ok')
+        self.assertIsInstance(statuses[0]['spent_usd'],str)
+        result=subprocess.run(self.base+['alert','set','--monthly-usd','1','--revoke-keys','bad key!']+self.options,
+                              text=True,capture_output=True)
+        self.assertEqual(result.returncode,1)
+        self.assertIn('Key pattern',result.stderr)
+
     def test_terminal_refresh_filters_and_exit(self):
         import pty
         import fcntl

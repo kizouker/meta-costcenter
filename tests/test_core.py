@@ -232,6 +232,29 @@ class PricingAndAlertTests(unittest.TestCase):
             with self.assertRaises(ValueError):alerts.validate(bad)
         alerts.delete(self.db,1)
         with self.assertRaises(NotFound):alerts.update(self.db,1,{'period':'day','limit_usd':'1'})
+    def test_alert_key_revocation_settings(self):
+        from meta_cost_center import alerts
+        valid=alerts.validate({'period':'day','limit_usd':'1','revoke_keys':True,'key_match':' bootcamp-* , key1,key1 '})
+        self.assertEqual((valid['revoke_keys'],valid['key_match']),(1,'bootcamp-*,key1'))
+        # The pattern is dropped when revocation is off, so a stale pattern never revokes anything.
+        self.assertIsNone(alerts.validate({'period':'day','limit_usd':'1','key_match':'*'})['key_match'])
+        for bad in ('', ' , ', 'has space', 'semi;colon', ','.join(['k']*21)):
+            with self.assertRaises(ValueError):alerts.validate({'period':'day','limit_usd':'1','revoke_keys':True,'key_match':bad})
+        alert_id=alerts.create(self.db,{'period':'day','limit_usd':'0.0001','revoke_keys':True,'key_match':'*'})
+        status=next(a for a in alerts.status(self.db,self.rates) if a['id']==alert_id)
+        self.assertEqual((status['revoke_keys'],status['key_match'],status['level']),(True,'*','exceeded'))
+        alerts.update(self.db,alert_id,{'period':'day','limit_usd':'1'})
+        status=next(a for a in alerts.status(self.db,self.rates) if a['id']==alert_id)
+        self.assertEqual((status['revoke_keys'],status['key_match']),(False,None))
+    def test_key_revocation_columns_migrate(self):
+        self.db.executescript('''DROP TABLE alerts;
+            CREATE TABLE alerts (id INTEGER PRIMARY KEY, period TEXT, project TEXT, billing_mode TEXT,
+              limit_usd TEXT, warn_levels TEXT DEFAULT '[80]', enabled INTEGER DEFAULT 1, created_at TEXT);
+            INSERT INTO alerts (period, limit_usd) VALUES ('day', '5');''')
+        self.db.close()
+        self.db=connect(self.root/'db.sqlite3')
+        from meta_cost_center import alerts
+        self.assertEqual(alerts.status(self.db,self.rates)[0]['revoke_keys'],False)
     def test_single_warning_column_migrates_to_levels(self):
         self.db.executescript('''DROP TABLE alerts;
             CREATE TABLE alerts (id INTEGER PRIMARY KEY, period TEXT, project TEXT, billing_mode TEXT,

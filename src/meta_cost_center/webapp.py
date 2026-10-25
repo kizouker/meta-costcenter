@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import alerts, pricing
+from . import alerts, keyguard, pricing
 from .collector import scan
 from .reports import (NotFound, bounds, equivalent_usd, estimate, grouped, project_detail, projects, query,
                       session_detail, sessions, timeline, totals, with_estimates, with_local_rates)
@@ -23,7 +23,7 @@ from .store import connect
 FILTERS = ('period', 'from', 'to', 'project', 'model', 'session', 'billing_mode')
 ASSETS = Path(__file__).with_name('web')
 PAGES = re.compile(r'/|/(?:breakdown|activity|sessions|projects|pricing|alerts)|/(?:sessions|projects)/[^/]+')
-API = re.compile(r'/api/(dashboard|export|sessions|projects|pricing|alerts)(?:/([^/]+))?')
+API = re.compile(r'/api/(dashboard|export|sessions|projects|pricing|alerts|keyguard)(?:/([^/]+))?')
 MAX_BODY = 16 * 1024
 
 
@@ -163,7 +163,12 @@ class Handler(BaseHTTPRequestHandler):
             if endpoint == 'pricing' and not key:
                 return self.send(200, pricing.table(db, rates))
             if endpoint == 'alerts' and not key:
-                return self.send(200, alerts.status(db, rates))
+                return self.send(200, keyguard.annotate(alerts.status(db, rates), self.server.config))
+            if endpoint == 'keyguard' and not key:
+                try:
+                    return self.send(200, keyguard.summary(self.server.config, raw['match'][-1] if 'match' in raw else None))
+                except ValueError as error:
+                    return self.send(400, {'error': str(error)})
             if endpoint == 'sessions':
                 return self.send(200, session_detail(db, key, filters, rates) if key else sessions(db, filters, rates))
             if endpoint == 'projects':
@@ -187,7 +192,9 @@ class Handler(BaseHTTPRequestHandler):
             with self.server.state_lock:
                 status = dict(self.server.state)
             status['interval'] = self.server.interval
-            return self.send(200, report(db, filters, rates, status))
+            data = report(db, filters, rates, status)
+            keyguard.annotate(data['alerts'], self.server.config)
+            return self.send(200, data)
         except NotFound as error:
             return self.send(404, {'error': str(error)})
         except (ValueError, KeyError):

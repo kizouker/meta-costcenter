@@ -1,5 +1,6 @@
 """Local cost alerts: a USD limit per day, week, or month, for all projects or one."""
 import json
+import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -8,6 +9,9 @@ from .reports import NotFound, equivalent_usd, local, query, totals
 PERIODS = ('day', 'week', 'month')
 PERIOD_NAMES = {'day': 'daily', 'week': 'weekly', 'month': 'monthly'}
 MAX_WARNINGS = 4
+MAX_KEY_PATTERNS = 20
+# One Meta Keyguard key-name pattern: letters, digits, '.', '_', '-', and the wildcards '*' and '?'.
+KEY_PATTERN = re.compile(r'[A-Za-z0-9._*?-]{1,64}')
 
 
 def window(period, today=None):
@@ -42,15 +46,31 @@ def validate(body):
         raise ValueError('Warning levels must be whole percentages from 1 to 99')
     if len(set(levels)) != len(levels):
         raise ValueError('Warning levels must be different from each other')
+    revoke_keys = bool(body.get('revoke_keys', False))
+    key_match = key_patterns(body.get('key_match')) if revoke_keys else None
     return {'period': period, 'project': project, 'billing_mode': billing_mode, 'limit_usd': str(limit),
-            'warn_levels': json.dumps(sorted(levels)), 'enabled': 1 if body.get('enabled', True) else 0}
+            'warn_levels': json.dumps(sorted(levels)), 'enabled': 1 if body.get('enabled', True) else 0,
+            'revoke_keys': 1 if revoke_keys else 0, 'key_match': key_match}
+
+
+def key_patterns(value):
+    """Normalise a key match such as '*', 'bootcamp-*', or 'key1,key2' to comma-separated patterns."""
+    patterns = [p.strip() for p in value.split(',') if p.strip()] if isinstance(value, str) else []
+    if not patterns:
+        raise ValueError('Key match is required when the alert revokes keys; use * for every key')
+    if len(patterns) > MAX_KEY_PATTERNS:
+        raise ValueError(f'Use at most {MAX_KEY_PATTERNS} key patterns')
+    for p in patterns:
+        if not KEY_PATTERN.fullmatch(p):
+            raise ValueError(f'Key pattern {p!r} may only use letters, digits, . _ - and the wildcards * and ?')
+    return ','.join(dict.fromkeys(patterns))
 
 
 def create(db, body):
     alert = validate(body)
     with db:
-        cursor = db.execute('INSERT INTO alerts (period, project, billing_mode, limit_usd, warn_levels, enabled, created_at) '
-                            'VALUES (:period, :project, :billing_mode, :limit_usd, :warn_levels, :enabled, :created_at)',
+        cursor = db.execute('INSERT INTO alerts (period, project, billing_mode, limit_usd, warn_levels, enabled, revoke_keys, key_match, created_at) '
+                            'VALUES (:period, :project, :billing_mode, :limit_usd, :warn_levels, :enabled, :revoke_keys, :key_match, :created_at)',
                             {**alert, 'created_at': datetime.now(timezone.utc).isoformat()})
     return cursor.lastrowid
 
@@ -59,7 +79,7 @@ def update(db, alert_id, body):
     alert = validate(body)
     with db:
         if not db.execute('UPDATE alerts SET period=:period, project=:project, billing_mode=:billing_mode, limit_usd=:limit_usd, '
-                          'warn_levels=:warn_levels, enabled=:enabled WHERE id=:id', {**alert, 'id': alert_id}).rowcount:
+                          'warn_levels=:warn_levels, enabled=:enabled, revoke_keys=:revoke_keys, key_match=:key_match WHERE id=:id', {**alert, 'id': alert_id}).rowcount:
             raise NotFound(f'Unknown alert: {alert_id}')
 
 
@@ -98,6 +118,7 @@ def status(db, rates, today=None):
         warning_at = max((v for v in levels if percent >= v), default=None)
         level = 'paused' if not a['enabled'] else 'exceeded' if percent >= 100 else 'warning' if warning_at else 'ok'
         result.append({**a, 'warn_levels': levels, 'warning_at': warning_at, 'enabled': bool(a['enabled']), 'label': describe(a),
+                       'revoke_keys': bool(a['revoke_keys']),
                        'window_start': start.isoformat(), 'window_end': end.isoformat(),
                        'spent_usd': spent, 'percent': round(float(percent), 1), 'level': level,
                        'unpriced_events': t['cost_unknown_events'], 'assumed_events': t['cost_assumed_events']})

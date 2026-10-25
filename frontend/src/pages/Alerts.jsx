@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { useModalDialog } from '../components.jsx';
-import { send, useResource } from '../api.js';
+import { jsonRequest, send, useResource } from '../api.js';
 import { number, usd } from '../format.js';
 
 const PERIODS = { day: 'Day', week: 'Week (from Monday)', month: 'Month' };
-const BLANK = { period: 'day', project: '', billing_mode: '', limit_usd: '', warn_levels: [80] };
+const BLANK = { period: 'day', project: '', billing_mode: '', limit_usd: '', warn_levels: [80], revoke_keys: false, key_match: '*' };
 const MAX_WARNINGS = 4;
 // Suggested values for the optional warning levels when they are first switched on.
 const SUGGESTED = [80, 50, 90, 95];
@@ -23,7 +23,84 @@ export function windowText(alert) {
 }
 
 export const alertText = alert => `${alert.label}: ${usd(alert.spent_usd)} of ${usd(alert.limit_usd)} ${windowText(alert)} (${alert.percent}%)`
-  + (alert.level === 'warning' && alert.warning_at ? ` · passed your ${alert.warning_at}% warning` : '');
+  + (alert.level === 'warning' && alert.warning_at ? ` · passed your ${alert.warning_at}% warning` : '')
+  + (alert.level === 'exceeded' ? keyguardText(alert.keyguard) : '');
+
+const time = stamp => new Date(stamp).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+const minutes = ms => { const m = Math.max(0, Math.round(ms / 60000)); return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`; };
+const keyList = keys => keys.length > 3 ? `${keys.slice(0, 3).join(', ')} and ${keys.length - 3} more` : keys.join(', ');
+
+/** What Meta Keyguard has done about an exceeded alert, for the alert bar and notifications. */
+function keyguardText(info) {
+  if (!info) return '';
+  if (info.revoked) return ` · Keyguard revoked ${info.revoked.keys.length} key(s) at ${time(info.revoked.at)}`;
+  if (!info.enforced) return ' · keys NOT revoked: Keyguard is not enforcing this alert';
+  return ' · Keyguard is revoking matching keys';
+}
+
+/** The Keyguard line under an alert that revokes keys. */
+function KeyguardStatus({ alert }) {
+  const info = alert.keyguard;
+  if (!info) return null;
+  let text, tone;
+  if (info.revoked) {
+    text = `Keyguard revoked ${keyList(info.revoked.keys)} at ${time(info.revoked.at)}.`;
+    tone = 'done';
+  } else if (!info.enforced) {
+    text = `Not enforced: ${info.reason}`;
+    tone = 'bad';
+  } else {
+    const covered = info.matching || [];
+    text = covered.length ? `Covers ${covered.length} key(s) now: ${keyList(covered)}.` : 'Matches no current keys.';
+    tone = covered.length ? '' : 'warn';
+  }
+  return <p className={'keyguard-status ' + tone}>{text}{info.warning && <span className="keyguard-warning"> {info.warning}</span>}</p>;
+}
+
+/** Live preview of the keys a key match covers, shown under the field in the alert dialog. */
+function KeyMatchPreview({ match }) {
+  const [state, setState] = useState(null);
+  useEffect(() => {
+    if (!match.trim()) { setState(null); return; }
+    let active = true;
+    const timer = setTimeout(() => {
+      jsonRequest('/api/keyguard?match=' + encodeURIComponent(match))
+        .then(data => active && setState({ data }))
+        .catch(failure => active && setState({ error: failure.message }));
+    }, 300);
+    return () => { active = false; clearTimeout(timer); };
+  }, [match]);
+  if (!state) return null;
+  if (state.error) return <p className="field-help keyguard-preview bad" id="key-match-preview">{state.error}</p>;
+  const { data } = state;
+  if (!data.available) return <p className="field-help keyguard-preview warn" id="key-match-preview">Cannot preview: {data.error}</p>;
+  const keys = data.preview || [];
+  return <p className={'field-help keyguard-preview' + (keys.length ? '' : ' warn')} id="key-match-preview">
+    {keys.length ? `Matches ${keys.length} key(s) now: ${keyList(keys)}` : 'Matches no current keys'}
+    {!data.enforced && <><br />{data.reason}</>}</p>;
+}
+
+/** Whether Meta Keyguard is installed and enforcing alerts, and the keys it manages. */
+function KeyguardPanel({ revoking }) {
+  const { data, error } = useResource('/api/keyguard');
+  if (!data && !error) return null;
+  if (error) return <section className="panel" id="keyguard"><h2>Meta Keyguard</h2><p className="notice danger">{error}</p></section>;
+  if (!data.installed && !revoking) return null;
+  const now = Date.now();
+  return <section className="panel" id="keyguard"><div className="panel-heading"><div><h2>Meta Keyguard</h2>
+    <p>Meta Keyguard deletes Meta API keys for alerts set to revoke them. Cost Center only reports what it does.</p></div></div>
+    {!data.available ? <p className="notice danger" id="keyguard-state">{data.error}</p>
+      : !data.enforced ? <p className="notice danger" id="keyguard-state">{revoking ? `${revoking} alert(s) are set to revoke keys but are not enforced. ` : ''}{data.reason}</p>
+      : <p className="notice ok" id="keyguard-state">Enforcing alerts that revoke keys{data.cost_center_check?.last_check?.at ? `; last checked at ${time(data.cost_center_check.last_check.at)}` : ''}.{data.warning && <> {data.warning}</>}</p>}
+    {data.available && data.last_failure && <p className="notice danger">Keyguard's last operation failed ({data.last_failure.op}, {data.last_failure.code}): {data.last_failure.message}</p>}
+    {data.available && <div className="table-wrap"><table id="keyguard-keys"><thead><tr><th>Key</th><th>State</th><th>Expires</th></tr></thead><tbody>
+      {data.keys.length ? data.keys.map(k => <tr key={k.meta_name}><td>{k.label}</td><td>{k.overdue ? 'overdue for deletion' : k.state}</td>
+        <td>{k.expires_at ? (k.overdue ? 'past due' : `in ${minutes(Date.parse(k.expires_at) - now)}`) : '–'}</td></tr>)
+        : <tr><td colSpan="3" className="muted">Keyguard manages no live keys.</td></tr>}
+    </tbody></table>
+    <p className="table-footer">{(data.targets || []).filter(t => !t.managed).length} other key(s) on dev.meta.ai{data.targets_as_of ? `, as of ${time(data.targets_as_of)}` : ''}.</p></div>}
+  </section>;
+}
 
 /** Sample alerts for previewing the alert bar; nothing is saved. */
 export const SAMPLE_ALERTS = {
@@ -42,7 +119,8 @@ function AlertDialog({ initial, projects, onSaved, onClose }) {
   const change = event => setValues(previous => ({ ...previous, [event.target.name]: event.target.value }));
   async function save(event) {
     event.preventDefault();
-    const body = { ...values, warn_levels: warnings.filter(slot => slot.on).map(slot => Number(slot.value)), project: values.project || null, billing_mode: values.billing_mode || null };
+    const body = { ...values, warn_levels: warnings.filter(slot => slot.on).map(slot => Number(slot.value)), project: values.project || null, billing_mode: values.billing_mode || null,
+      key_match: values.revoke_keys ? values.key_match : null };
     setSaving(true);
     try {
       await (values.id ? send('PUT', '/api/alerts/' + values.id, body) : send('POST', '/api/alerts', body));
@@ -53,7 +131,7 @@ function AlertDialog({ initial, projects, onSaved, onClose }) {
   return <dialog {...modal} id="alert-dialog" className="modal" aria-labelledby="alert-dialog-title">
     <div className="modal-heading"><h2 id="alert-dialog-title">{values.id ? 'Edit alert' : 'Add alert'}</h2><button type="button" aria-label="Close" onClick={onClose}>×</button></div>
     <form className="alert-form" id="alert-form" onSubmit={save}>
-      <p className="modal-intro">Get warned when estimated cost passes a limit. Alerts never stop usage.</p>
+      <p className="modal-intro">Get warned when estimated cost passes a limit. Alerts never stop usage themselves, although Meta Keyguard can revoke keys when you allow it below.</p>
       <label>Period<select name="period" value={values.period} onChange={change}>{Object.entries(PERIODS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
       <label>Project<select name="project" value={values.project || ''} onChange={change}><option value="">All projects</option>{projectOptions.map(project => <option key={project} value={project}>{project}</option>)}</select></label>
       <label>Usage<select name="billing_mode" value={values.billing_mode || ''} onChange={change}><option value="">All usage</option><option value="payg">Pay as you go only</option></select></label>
@@ -68,6 +146,13 @@ function AlertDialog({ initial, projects, onSaved, onClose }) {
         </div>)}
       </fieldset>
       <label>Limit (USD)<input name="limit_usd" type="number" min="0.01" step="any" required value={values.limit_usd} onChange={change} placeholder="5.00" /></label>
+      <fieldset className="key-revocation"><legend>Meta Keyguard</legend>
+        <label className="checkbox-label"><input type="checkbox" name="revoke_keys" checked={values.revoke_keys} onChange={event => setValues(previous => ({ ...previous, revoke_keys: event.target.checked }))} />
+          Revoke Meta API keys when the limit is exceeded</label>
+        <p className="field-help">Meta Keyguard deletes matching keys on dev.meta.ai when its Cost Center check is turned on. Use * for every key, bootcamp-* for a prefix, or key1,key2 for specific keys.</p>
+        <label>Keys to revoke<input name="key_match" type="text" required={values.revoke_keys} disabled={!values.revoke_keys} value={values.key_match || ''} onChange={change} placeholder="*" aria-describedby="key-match-preview" /></label>
+        {values.revoke_keys && <KeyMatchPreview match={values.key_match || ''} />}
+      </fieldset>
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="modal-actions"><button type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={saving}>{values.id ? 'Save alert' : 'Add alert'}</button></div>
     </form>
@@ -101,7 +186,7 @@ export default function Alerts({ options, onPreview }) {
   const remove = alert => { if (confirm(`Delete the ${alert.label.toLowerCase()}?`)) act(send('DELETE', '/api/alerts/' + alert.id)); };
   return <>
     {(error || actionError) && <div className="notice danger" role="alert">{error || actionError}</div>}
-    <section className="panel" id="alerts"><div className="panel-heading"><div><h2>Your alerts</h2><p>Get warned when estimated cost passes a limit for a day, a week, or a month, for all projects or one. Unpriced usage is not counted, and alerts never stop usage.</p></div>
+    <section className="panel" id="alerts"><div className="panel-heading"><div><h2>Your alerts</h2><p>Get warned when estimated cost passes a limit for a day, a week, or a month, for all projects or one. Unpriced usage is not counted. Alerts never stop usage themselves, but an alert can ask Meta Keyguard to revoke API keys.</p></div>
       <button type="button" id="add-alert" className="primary" onClick={() => setDialog({})}>Add alert</button></div>
       {!data ? <p className="panel-empty">Loading alerts…</p> : !data.length ? <p className="panel-empty">No alerts yet. Add a daily limit to start.</p> :
         <ul className="alert-list" id="alert-rows">{data.map(alert => <li key={alert.id} className={'alert-item level-' + alert.level}>
@@ -109,12 +194,14 @@ export default function Alerts({ options, onPreview }) {
             <span className="alert-status">{alert.level === 'paused' ? 'Paused' : `${usd(alert.spent_usd)} of ${usd(alert.limit_usd)} ${windowText(alert)}`}</span></div>
           <div className="alert-meter" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(alert.percent, 100)} aria-label={`${alert.percent}% of limit`}>
             <span style={{ width: Math.min(alert.percent, 100) + '%' }} />{alert.warn_levels.map(value => <i key={value} style={{ left: value + '%' }} title={`Warns at ${value}%`} />)}</div>
-          <div className="alert-details"><span>{alert.percent}% used · warns at {alert.warn_levels.map(value => value + '%').join(', ')}{alert.unpriced_events ? ` · ${number(alert.unpriced_events)} unpriced completions not counted` : ''}</span>
-            <span className="row-actions"><button type="button" className="small-button" onClick={() => setDialog({ id: alert.id, period: alert.period, project: alert.project || '', billing_mode: alert.billing_mode || '', limit_usd: alert.limit_usd, warn_levels: alert.warn_levels, enabled: alert.enabled })}>Edit</button>
+          <div className="alert-details"><span>{alert.percent}% used · warns at {alert.warn_levels.map(value => value + '%').join(', ')}{alert.revoke_keys ? ` · revokes keys matching ${alert.key_match}` : ''}{alert.unpriced_events ? ` · ${number(alert.unpriced_events)} unpriced completions not counted` : ''}</span>
+            <span className="row-actions"><button type="button" className="small-button" onClick={() => setDialog({ id: alert.id, period: alert.period, project: alert.project || '', billing_mode: alert.billing_mode || '', limit_usd: alert.limit_usd, warn_levels: alert.warn_levels, enabled: alert.enabled, revoke_keys: alert.revoke_keys, key_match: alert.key_match || '*' })}>Edit</button>
               <button type="button" className="small-button" onClick={() => toggle(alert)}>{alert.enabled ? 'Pause' : 'Resume'}</button>
               <button type="button" className="small-button" onClick={() => remove(alert)}>Delete</button></span></div>
+          <KeyguardStatus alert={alert} />
         </li>)}</ul>}
     </section>
+    <KeyguardPanel revoking={(data || []).filter(alert => alert.revoke_keys && alert.enabled).length} />
     <section className="panel preview-panel" id="alert-preview"><div><h2>Notifications and preview</h2><p>See how the alert bar looks with sample numbers. Nothing is saved.</p></div>
       <div className="preview-controls"><NotificationControl />
         <div className="form-actions"><button type="button" id="preview-exceeded" onClick={() => onPreview(SAMPLE_ALERTS.exceeded)}>Preview limit exceeded</button>

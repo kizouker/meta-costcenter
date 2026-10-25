@@ -1,8 +1,13 @@
-# Muse Cost Center
+# Meta Cost Center
 
-![The Muse Cost Center dashboard](./muse-cost-control-screenshot.jpg)
+Track your tokens and cost, set more robust billing alarms, and integrates with [Meta Keyguard](https://github.com/omenking/meta-keyguard) to kill keys if you hit your spend limit.
 
-Muse Cost Center tracks how much you use Muse Code and roughly what that usage would
+
+![](./banner.png)
+
+![The Meta Cost Center dashboard](./muse-cost-control-screenshot.jpg)
+
+Meta Cost Center tracks how much you use Muse Code and roughly what that usage would
 cost at API rates. It reads the usage records that Muse already keeps on your machine,
 stores them in a local SQLite database, and shows them in a dashboard in your browser,
 broken down by project, model, and session. You can also set spending alerts and record
@@ -232,6 +237,42 @@ $30 monthly limit for all projects with warnings at 50% and 80%:
 
 Alerts that have reached a warning level or their limit are also listed in the text
 reports.
+
+### Revoking Meta API keys with Meta Keyguard
+
+Alerts can also ask [Meta Keyguard](https://github.com/omenking/meta-keyguard) to revoke Meta
+API keys once their limit is exceeded. In the alert dialog, turn on **Revoke Meta API keys
+when the limit is exceeded** and enter which keys: `*` for every key, `bootcamp-*` for keys
+whose names start with `bootcamp-`, or `key1,key2` for specific keys. The same can be set
+from the command line:
+
+```bash
+./muse-cost alert set --monthly-usd 30 --revoke-keys 'bootcamp-*'
+```
+
+Cost Center itself never deletes anything. Keyguard reads the alerts with the following
+command, which imports any new usage first and prints every alert's level and key match as
+JSON, and it acts on them only when its own Cost Center check is turned on:
+
+```bash
+./muse-cost alert status --json
+```
+
+The **Alerts** page shows what Keyguard is doing, which needs Cost Center to know how to run
+it. Add the path to your configuration file if `keyguard` is not on your `PATH`:
+
+```toml
+keyguard_command = "/path/to/meta-keyguard/keyguard"
+```
+
+With that set, each alert that revokes keys shows one of three things: the keys it covers
+right now, the keys Keyguard revoked for it in the current period, or, in red, why it is
+**not enforced** (for example, Keyguard's Cost Center check is off or Keyguard cannot be
+found). The alert bar adds the same information when a limit is exceeded. A Meta Keyguard
+panel lists the keys Keyguard manages and any failure it last reported, and the key match
+field in the alert dialog previews which current keys a pattern covers as you type. Cost
+Center reads all of this from `keyguard status --json`, which never contains a secret, and
+it runs that command only while an alert revokes keys or the Alerts page is open.
 
 ## Recording actual bills
 

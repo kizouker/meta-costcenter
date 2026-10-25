@@ -621,8 +621,10 @@ body { padding-top: var(--alert-bar, 0px); }
 .preview-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
 #alerts .panel-heading { align-items: flex-start; }
 #alerts .panel-heading p { max-width: 70ch; }
-.warning-levels { margin: 0; padding: 14px 16px; border: 1px solid #cbd2dc; border-radius: 8px; display: grid; gap: 10px; }
-.warning-levels legend { padding: 0 6px; font-size: 18px; font-weight: 600; }
+.warning-levels, .key-revocation { margin: 0; padding: 14px 16px; border: 1px solid #cbd2dc; border-radius: 8px; display: grid; gap: 10px; }
+.warning-levels legend, .key-revocation legend { padding: 0 6px; font-size: 18px; font-weight: 600; }
+.modal .alert-form .checkbox-label { flex-direction: row; align-items: center; gap: 10px; }
+.modal .alert-form .checkbox-label input { width: 22px; height: 22px; min-height: 0; margin: 0; flex: none; accent-color: #00533d; }
 .field-help { margin: 0; font-size: 15px; color: #293548; }
 .warning-slot { display: grid; grid-template-columns: 24px 1fr 120px; align-items: center; gap: 12px; }
 .warning-slot input[type=checkbox] { width: 22px; height: 22px; margin: 0; accent-color: #00533d; }
@@ -633,3 +635,13 @@ body { padding-top: var(--alert-bar, 0px); }
 .modal .alert-form .percent-input input { width: 100%; min-height: 40px; }
 .modal .alert-form input:disabled { background: #f1f3f5; color: #6b7280; border-color: #cbd2dc; }
 .warning-slot > label { min-width: 0; display: block; }
+
+/* Meta Keyguard: enforcement state for alerts that revoke API keys. */
+.notice.ok { background: #eef8f3; border-color: #b9dccb; color: #00533d; }
+.keyguard-status { margin: 6px 0 0; font-size: 15px; color: #293548; }
+.keyguard-status.done { color: #00533d; font-weight: 600; }
+.keyguard-status.warn, .keyguard-preview.warn { color: #624300; }
+.keyguard-status.bad, .keyguard-preview.bad { color: #8a2014; font-weight: 600; }
+.keyguard-warning { color: #624300; font-weight: 400; }
+#keyguard table { margin-top: 4px; }
+#keyguard > .notice { margin: 0 22px 18px; }

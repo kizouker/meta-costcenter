@@ -41,9 +41,11 @@ def connect(path):
       output_per_million TEXT, updated_at TEXT);
     CREATE TABLE IF NOT EXISTS alerts (
       id INTEGER PRIMARY KEY, period TEXT, project TEXT, billing_mode TEXT,
-      limit_usd TEXT, warn_levels TEXT DEFAULT '[80]', enabled INTEGER DEFAULT 1, created_at TEXT);
+      limit_usd TEXT, warn_levels TEXT DEFAULT '[80]', enabled INTEGER DEFAULT 1, created_at TEXT,
+      revoke_keys INTEGER DEFAULT 0, key_match TEXT);
     ''')
     migrate_warn_levels(db)
+    migrate_key_revocation(db)
     migrate_monthly_warning(db)
     return db
 
@@ -58,6 +60,16 @@ def migrate_warn_levels(db):
             db.execute("ALTER TABLE alerts ADD COLUMN warn_levels TEXT DEFAULT '[80]'")
         db.execute('UPDATE alerts SET warn_levels = json_array(warn_percent)')
         db.execute('ALTER TABLE alerts DROP COLUMN warn_percent')
+
+
+def migrate_key_revocation(db):
+    """Alerts can ask Meta Keyguard to revoke matching API keys once their limit is exceeded."""
+    columns = {r[1] for r in db.execute('PRAGMA table_info(alerts)')}
+    with db:
+        if 'revoke_keys' not in columns:
+            db.execute('ALTER TABLE alerts ADD COLUMN revoke_keys INTEGER DEFAULT 0')
+        if 'key_match' not in columns:
+            db.execute('ALTER TABLE alerts ADD COLUMN key_match TEXT')
 
 
 def migrate_monthly_warning(db):
