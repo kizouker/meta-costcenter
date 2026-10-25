@@ -145,7 +145,7 @@ function AlertDialog({ initial, projects, onSaved, onClose }) {
             value={slot.value} onChange={event => setWarning(i, { value: event.target.value })} /><span aria-hidden="true">%</span></span>
         </div>)}
       </fieldset>
-      <label>Limit (USD)<input name="limit_usd" type="number" min="0.01" step="any" required value={values.limit_usd} onChange={change} placeholder="5.00" /></label>
+      <label>Limit (USD)<input name="limit_usd" type="number" min="0.01" step="0.01" required value={values.limit_usd} onChange={change} placeholder="5.00" /></label>
       <fieldset className="key-revocation"><legend>Meta Keyguard</legend>
         <label className="checkbox-label"><input type="checkbox" name="revoke_keys" checked={values.revoke_keys} onChange={event => setValues(previous => ({ ...previous, revoke_keys: event.target.checked }))} />
           Revoke Meta API keys when the limit is exceeded</label>

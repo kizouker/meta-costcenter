@@ -21,6 +21,14 @@ def event(rid='event-1', session='parent', inp=100, cached=20, model='test-model
                         'response':'SECRET_RESPONSE'},'prompt':'SECRET_PROMPT'}}
 
 
+
+def raw_alert(db, **fields):
+    """Insert an alert without validation, for limits smaller than the fixture's sub-cent spend."""
+    fields = {'warn_levels': '[80]', 'enabled': 1, **fields}
+    with db:
+        return db.execute(f'INSERT INTO alerts ({", ".join(fields)}) VALUES ({", ".join("?" * len(fields))})',
+                          list(fields.values())).lastrowid
+
 class CollectorTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
@@ -215,8 +223,9 @@ class PricingAndAlertTests(unittest.TestCase):
         self.assertEqual(alerts.window('month',date(2026,10,24))[0],date(2026,10,1))
         self.db.execute("UPDATE events SET project='site'")
         self.db.commit()
-        alerts.create(self.db,{'period':'day','limit_usd':'0.0001'})                        # spent 0.000102: exceeded
-        alerts.create(self.db,{'period':'week','project':'site','limit_usd':'0.00012','warn_levels':[90,50,80]})  # 85%: warning at 80
+        # The fixture spends far less than a cent, so these limits are stored directly, past validation.
+        raw_alert(self.db,period='day',limit_usd='0.0001')                                   # spent 0.000102: exceeded
+        raw_alert(self.db,period='week',project='site',limit_usd='0.00012',warn_levels='[50, 80, 90]')  # 85%: warning at 80
         alerts.create(self.db,{'period':'month','project':'other','limit_usd':'1'})         # nothing spent
         alerts.create(self.db,{'period':'month','billing_mode':'payg','limit_usd':'1','enabled':False})
         levels=[a['level'] for a in alerts.status(self.db,self.rates)]
@@ -228,7 +237,8 @@ class PricingAndAlertTests(unittest.TestCase):
         for bad in ({'period':'year','limit_usd':'1'},{'period':'day','limit_usd':'0'},{'period':'day','limit_usd':'x'},
                     {'period':'day','limit_usd':'1','warn_levels':[100]},{'period':'day','limit_usd':'1','warn_levels':[]},
                     {'period':'day','limit_usd':'1','warn_levels':[10,20,30,40,50]},{'period':'day','limit_usd':'1','warn_levels':[50,50]},
-                    {'period':'day','limit_usd':'1','billing_mode':'subscription'}):
+                    {'period':'day','limit_usd':'1','billing_mode':'subscription'},
+                    {'period':'day','limit_usd':'0.009'},{'period':'day','limit_usd':'0.015'}):
             with self.assertRaises(ValueError):alerts.validate(bad)
         alerts.delete(self.db,1)
         with self.assertRaises(NotFound):alerts.update(self.db,1,{'period':'day','limit_usd':'1'})
@@ -240,7 +250,8 @@ class PricingAndAlertTests(unittest.TestCase):
         self.assertIsNone(alerts.validate({'period':'day','limit_usd':'1','key_match':'*'})['key_match'])
         for bad in ('', ' , ', 'has space', 'semi;colon', ','.join(['k']*21)):
             with self.assertRaises(ValueError):alerts.validate({'period':'day','limit_usd':'1','revoke_keys':True,'key_match':bad})
-        alert_id=alerts.create(self.db,{'period':'day','limit_usd':'0.0001','revoke_keys':True,'key_match':'*'})
+        self.assertEqual(alerts.validate({'period':'day','limit_usd':'0.01'})['limit_usd'],'0.01')
+        alert_id=raw_alert(self.db,period='day',limit_usd='0.0001',revoke_keys=1,key_match='*')
         status=next(a for a in alerts.status(self.db,self.rates) if a['id']==alert_id)
         self.assertEqual((status['revoke_keys'],status['key_match'],status['level']),(True,'*','exceeded'))
         alerts.update(self.db,alert_id,{'period':'day','limit_usd':'1'})

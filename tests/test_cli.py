@@ -35,12 +35,13 @@ class CLITests(unittest.TestCase):
         self.assertIn('unknown',self.command('tui','--once','--period','all'))
     def test_warning_levels_and_invalid_filters(self):
         text=self.command('alert','set','--monthly-usd','30','--at','50,80,100')
-        self.assertIn('not a spend cap',text)
-        self.command('alert','set','--monthly-usd','0.00001')
+        self.assertIn('does not stop usage',text)
+        self.command('alert','set','--monthly-usd','0.01')
         prices=self.root/'prices.json'
+        # Rates high enough that the fixture's few tokens pass a one-cent limit.
         prices.write_text(json.dumps({'rates':[{'model':'test-model','currency':'USD','effective_from':'2020-01-01',
             'retrieved_at':'2020-01-01','snapshot_version':'fixture','source_url':'https://example.invalid',
-            'input_per_million':'1','cached_input_per_million':'0.1','output_per_million':'2'}]}))
+            'input_per_million':'100000','cached_input_per_million':'10000','output_per_million':'200000'}]}))
         self.assertIn('WARNING: Monthly limit for all projects',self.command('month','--prices',str(prices)))
         result=subprocess.run(self.base+['show','--from','bad-date']+self.options,
                               text=True,capture_output=True)
@@ -49,11 +50,16 @@ class CLITests(unittest.TestCase):
 
     def test_alert_status_json_reports_key_revocation(self):
         self.command('alert','set','--monthly-usd','30','--revoke-keys','bootcamp-*, key1')
-        self.command('alert','set','--monthly-usd','40')
+        self.command('alert','set','--monthly-usd','40','--project','site')
         statuses=json.loads(self.command('alert','status','--json'))
+        self.assertEqual([a['project'] for a in statuses],[None,'site'])
         self.assertEqual([(a['revoke_keys'],a['key_match']) for a in statuses],[(True,'bootcamp-*,key1'),(False,None)])
         self.assertEqual(statuses[0]['level'],'ok')
         self.assertIsInstance(statuses[0]['spent_usd'],str)
+        for limit in ('0.001','0.015'):
+            result=subprocess.run(self.base+['alert','set','--monthly-usd',limit]+self.options,text=True,capture_output=True)
+            self.assertEqual(result.returncode,1)
+            self.assertIn('Limit must',result.stderr)
         result=subprocess.run(self.base+['alert','set','--monthly-usd','1','--revoke-keys','bad key!']+self.options,
                               text=True,capture_output=True)
         self.assertEqual(result.returncode,1)

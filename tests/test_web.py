@@ -124,7 +124,10 @@ class WebTests(unittest.TestCase):
         self.assertEqual(json.loads(self.get('/api/dashboard?period=all')[1])['totals']['unknown_mode_equivalent_usd'],'0')
         self.assertEqual(self.send_json('DELETE','/api/pricing/test-model',{})[0],200)
         self.assertEqual(self.send_json('DELETE','/api/pricing/test-model',{})[0],404)
-        code,created=self.send_json('POST','/api/alerts',{'period':'day','limit_usd':'0.00001'})
+        # A high local rate makes the fixture's few tokens pass a one-cent limit.
+        self.assertEqual(self.send_json('PUT','/api/pricing/test-model',{'input_per_million':'100000','cached_input_per_million':'10000','output_per_million':'200000'})[0],200)
+        self.assertEqual(self.send_json('POST','/api/alerts',{'period':'day','limit_usd':'0.001'})[0],400)
+        code,created=self.send_json('POST','/api/alerts',{'period':'day','limit_usd':'0.01'})
         self.assertEqual(code,201)
         dashboard=json.loads(self.get('/api/dashboard?period=all')[1])
         self.assertEqual([(a['id'],a['level']) for a in dashboard['alerts']],[(created['id'],'exceeded')])

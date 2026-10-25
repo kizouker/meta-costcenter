@@ -9,6 +9,8 @@ from .reports import NotFound, equivalent_usd, local, query, totals
 PERIODS = ('day', 'week', 'month')
 PERIOD_NAMES = {'day': 'daily', 'week': 'weekly', 'month': 'monthly'}
 MAX_WARNINGS = 4
+# Limits are whole cents: USD has nothing smaller, and a sub-cent limit would trip on any usage.
+MIN_LIMIT = Decimal('0.01')
 MAX_KEY_PATTERNS = 20
 # One Meta Keyguard key-name pattern: letters, digits, '.', '_', '-', and the wildcards '*' and '?'.
 KEY_PATTERN = re.compile(r'[A-Za-z0-9._*?-]{1,64}')
@@ -37,8 +39,10 @@ def validate(body):
         limit = Decimal(str(body.get('limit_usd')))
     except InvalidOperation:
         raise ValueError('Limit must be a number') from None
-    if not limit.is_finite() or limit <= 0:
-        raise ValueError('Limit must be greater than zero')
+    if not limit.is_finite() or limit < MIN_LIMIT:
+        raise ValueError('Limit must be at least $0.01')
+    if limit.as_tuple().exponent < -2:
+        raise ValueError('Limit must be in whole cents, for example 0.50')
     levels = body.get('warn_levels', [80])
     if not isinstance(levels, list) or not 1 <= len(levels) <= MAX_WARNINGS:
         raise ValueError(f'Set between 1 and {MAX_WARNINGS} warning levels')

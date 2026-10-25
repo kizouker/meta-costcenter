@@ -66,6 +66,7 @@ def parser():
     a = sub.add_parser('alert',parents=[common])
     a.add_argument('action',choices=['set','status'])
     a.add_argument('--monthly-usd')
+    a.add_argument('--project', help='Limit the alert to one project (the Muse workspace folder name)')
     a.add_argument('--at', default='50,80,100', help='Comma-separated warning percentages')
     a.add_argument('--revoke-keys', metavar='PATTERN',
                    help='Ask Meta Keyguard to revoke keys matching PATTERN (*, bootcamp-*, or key1,key2) once the limit is exceeded')
@@ -130,10 +131,14 @@ def main():
             if not levels or any(x <= 0 or x > 100 for x in levels):
                 raise ValueError('Warning percentages must be between 1 and 100')
             below = [x for x in levels if x < 100][:alerts.MAX_WARNINGS]
-            alerts.create(db, {'period': 'month', 'limit_usd': value, 'warn_levels': below or [80],
+            alerts.create(db, {'period': 'month', 'project': args.project, 'limit_usd': value, 'warn_levels': below or [80],
                                'revoke_keys': args.revoke_keys is not None, 'key_match': args.revoke_keys})
-            print(f'Local API-equivalent monthly alert added: USD {value}. This is not a spend cap. '
-                  'Manage alerts on the dashboard Alerts page.')
+            scope = f'project {args.project}' if args.project else 'all projects'
+            action = (f'When it is exceeded, Meta Keyguard revokes keys matching {args.revoke_keys}, '
+                      'provided its Cost Center check is on (`keyguard cost-center on`).'
+                      if args.revoke_keys else 'Cost Center only warns you; it does not stop usage.')
+            print(f'Added a monthly alert for {scope}: USD {value} of estimated local usage, priced at API rates. '
+                  f'{action}\nManage alerts on the dashboard Alerts page.')
             return
         if args.command == 'show':
             from .webapp import run
