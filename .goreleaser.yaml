@@ -1,8 +1,8 @@
 version: 2
 
 builds:
-  - main: ./cmd/muse-cost
-    binary: muse-cost
+  - main: ./cmd/meta-cost
+    binary: meta-cost
     env:
       - CGO_ENABLED=0
     goos: [linux]
@@ -13,7 +13,7 @@ builds:
 
 archives:
   - formats: [tar.gz]
-    name_template: "muse-cost_{{ .Os }}_{{ .Arch }}"
+    name_template: "meta-cost_{{ .Os }}_{{ .Arch }}"
     files: [README.md, LICENSE]
 
 checksum:

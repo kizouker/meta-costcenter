@@ -139,7 +139,7 @@ func (e *usageError) Error() string { return e.message }
 
 func usage() string {
 	var b strings.Builder
-	b.WriteString("usage: muse-cost <command> [options]\n\nObserve local Muse usage; estimates are not bills.\n\ncommands:\n")
+	b.WriteString("usage: meta-cost <command> [options]\n\nObserve local Muse usage; estimates are not bills.\n\ncommands:\n")
 	for _, c := range commands {
 		fmt.Fprintf(&b, "  %-10s %s\n", c.name, c.help)
 	}
@@ -147,13 +147,13 @@ func usage() string {
 	for _, o := range commonOptions {
 		fmt.Fprintf(&b, "  %-18s %s\n", o.name+" "+o.value, o.help)
 	}
-	b.WriteString("\nRun `muse-cost <command> --help` for a command's options.\n")
+	b.WriteString("\nRun `meta-cost <command> --help` for a command's options.\n")
 	return b.String()
 }
 
 func commandUsage(c command) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "usage: muse-cost %s", c.name)
+	fmt.Fprintf(&b, "usage: meta-cost %s", c.name)
 	for _, p := range c.positionals {
 		if choices := c.choices[p]; choices != nil {
 			fmt.Fprintf(&b, " {%s}", strings.Join(choices, ","))
@@ -202,7 +202,7 @@ func parseArgs(argv []string) (args, error) {
 			return a, &usageError{usage(), true}
 		}
 		if arg == "--version" {
-			return a, &usageError{"muse-cost " + Version + "\n", true}
+			return a, &usageError{"meta-cost " + Version + "\n", true}
 		}
 		if !strings.HasPrefix(arg, "--") || arg == "--" {
 			if spec == nil {
@@ -212,7 +212,7 @@ func parseArgs(argv []string) (args, error) {
 					}
 				}
 				if spec == nil {
-					return a, &usageError{message: fmt.Sprintf("muse-cost: unknown command %s\n\n%s", pyRepr(arg), usage())}
+					return a, &usageError{message: fmt.Sprintf("meta-cost: unknown command %s\n\n%s", pyRepr(arg), usage())}
 				}
 				a.command = arg
 				continue
@@ -223,7 +223,7 @@ func parseArgs(argv []string) (args, error) {
 		name, inline, hasInline := strings.Cut(arg, "=")
 		o := findOption(name)
 		if o == nil {
-			context := "muse-cost"
+			context := "meta-cost"
 			if spec != nil {
 				context += " " + spec.name
 			}
@@ -231,20 +231,20 @@ func parseArgs(argv []string) (args, error) {
 		}
 		if o.value == "" {
 			if hasInline {
-				return a, &usageError{message: fmt.Sprintf("muse-cost: %s does not take a value", name)}
+				return a, &usageError{message: fmt.Sprintf("meta-cost: %s does not take a value", name)}
 			}
 			a.values[o.dest] = append(a.values[o.dest], "")
 			continue
 		}
 		if !hasInline {
 			if i+1 >= len(argv) {
-				return a, &usageError{message: fmt.Sprintf("muse-cost: %s needs a value", name)}
+				return a, &usageError{message: fmt.Sprintf("meta-cost: %s needs a value", name)}
 			}
 			i++
 			inline = argv[i]
 		}
 		if o.choices != nil && !contains(o.choices, inline) {
-			return a, &usageError{message: fmt.Sprintf("muse-cost: %s must be one of %s, not %s", name,
+			return a, &usageError{message: fmt.Sprintf("meta-cost: %s must be one of %s, not %s", name,
 				strings.Join(o.choices, ", "), pyRepr(inline))}
 		}
 		a.values[o.dest] = append(a.values[o.dest], inline)
@@ -253,12 +253,12 @@ func parseArgs(argv []string) (args, error) {
 		return a, &usageError{message: usage()}
 	}
 	if len(free) != len(spec.positionals) {
-		return a, &usageError{message: fmt.Sprintf("muse-cost %s: expected %d argument(s)\n\n%s", spec.name,
+		return a, &usageError{message: fmt.Sprintf("meta-cost %s: expected %d argument(s)\n\n%s", spec.name,
 			len(spec.positionals), commandUsage(*spec))}
 	}
 	for i, name := range spec.positionals {
 		if choices := spec.choices[name]; choices != nil && !contains(choices, free[i]) {
-			return a, &usageError{message: fmt.Sprintf("muse-cost %s: %s must be one of %s, not %s", spec.name, name,
+			return a, &usageError{message: fmt.Sprintf("meta-cost %s: %s must be one of %s, not %s", spec.name, name,
 				strings.Join(choices, ", "), pyRepr(free[i]))}
 		}
 		a.positionals[name] = free[i]
@@ -298,7 +298,7 @@ func Main(argv []string, assets Assets) int {
 		if errors.Is(err, errInterrupted) {
 			return 0
 		}
-		fmt.Fprintf(os.Stderr, "muse-cost: %v\n", err)
+		fmt.Fprintf(os.Stderr, "meta-cost: %v\n", err)
 		return 1
 	}
 	return 0
@@ -679,7 +679,7 @@ func alert(store *Store, a args, roots []string, config Config, rates []Rate, ou
 	action := "Cost Center only warns you; it does not stop usage."
 	if a.has("revoke_keys") {
 		action = fmt.Sprintf("When it is exceeded, Meta Keyguard revokes keys matching %s, provided its Cost Center check is on "+
-			"(`keyguard cost-center on`).", a.get("revoke_keys"))
+			"(`meta-keyguard cost-center on`).", a.get("revoke_keys"))
 	}
 	fmt.Fprintf(out, "Added a monthly alert for %s: USD %s of estimated local usage, priced at API rates. %s\n"+
 		"Manage alerts on the dashboard Alerts page.\n", scope, value, action)

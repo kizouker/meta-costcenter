@@ -19,11 +19,11 @@ import (
 var binary string
 
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "muse-cost-test")
+	dir, err := os.MkdirTemp("", "meta-cost-test")
 	if err != nil {
 		panic(err)
 	}
-	binary = filepath.Join(dir, "muse-cost")
+	binary = filepath.Join(dir, "meta-cost")
 	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		panic(fmt.Sprintf("build failed: %v\n%s", err, out))
 	}
@@ -135,7 +135,7 @@ func TestWarningLevelsAndInvalidFilters(t *testing.T) {
 		t.Fatal("no warning for an exceeded alert")
 	}
 	code, _, stderr := c.run("show", "--from", "bad-date")
-	if code != 1 || !strings.HasPrefix(stderr, "muse-cost: ") || strings.Contains(stderr, "goroutine") {
+	if code != 1 || !strings.HasPrefix(stderr, "meta-cost: ") || strings.Contains(stderr, "goroutine") {
 		t.Fatalf("%d %q", code, stderr)
 	}
 }

@@ -1,4 +1,4 @@
-// Command muse-cost observes local Muse usage and estimates its cost.
+// Command meta-cost observes local Muse usage and estimates its cost.
 package main
 
 import (

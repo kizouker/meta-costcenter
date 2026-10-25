@@ -40,7 +40,7 @@ var (
 )
 
 func keyguardCommand(config Config) []string {
-	command := "keyguard"
+	command := "meta-keyguard"
 	if config.KeyguardCommand != nil {
 		command = *config.KeyguardCommand
 	}

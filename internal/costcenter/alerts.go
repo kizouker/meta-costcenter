@@ -235,7 +235,7 @@ func describe(period string, project, billingMode *string) string {
 }
 
 // AlertStatus is an alert with its current spend. Meta Keyguard reads these from
-// `muse-cost alert status --json` to decide which keys to revoke.
+// `meta-cost alert status --json` to decide which keys to revoke.
 type AlertStatus struct {
 	ID             int64          `json:"id"`
 	Period         string         `json:"period"`

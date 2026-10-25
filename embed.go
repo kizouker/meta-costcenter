@@ -1,4 +1,4 @@
-// Package metacostcenter holds the files compiled into the muse-cost binary.
+// Package metacostcenter holds the files compiled into the meta-cost binary.
 package metacostcenter
 
 import "embed"

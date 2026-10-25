@@ -8,7 +8,7 @@
 
 ## Implementation checkpoint — 2026-10-24
 
-The repository now contains the `muse-cost` Go binary (ported from the original Python implementation, which is kept on the `python` branch), live browser dashboard, incremental SQLite collector, shared filtered reports, versioned token pricing, exports, local warnings, and manual account observations. See [README.md](../README.md) for usage and limitations.
+The repository now contains the `meta-cost` Go binary (ported from the original Python implementation, which is kept on the `python` branch), live browser dashboard, incremental SQLite collector, shared filtered reports, versioned token pricing, exports, local warnings, and manual account observations. See [README.md](../README.md) for usage and limitations.
 
 **Cost update — 2026-10-24:** Cost-first overview with a cost-over-time chart, assumed back-pricing, local rates for models without public pricing (stored only in the local database), and day/week/month alerts per project with a dashboard banner and desktop notifications. See [COST-AND-ALERTS.md](COST-AND-ALERTS.md).
 
@@ -55,7 +55,7 @@ The first objective is **visibility**, not enforcement. This project should not 
 ### MVP acceptance criteria
 
 - [ ] A clean WSL install can import existing Muse sessions from disk.
-- [ ] `muse-cost show` opens an auto-refreshing local browser dashboard showing today and month-to-date usage grouped by model and project.
+- [ ] `meta-cost show` opens an auto-refreshing local browser dashboard showing today and month-to-date usage grouped by model and project.
 - [ ] Dashboard filters cover date range, project, model, session, and billing mode; active filters survive refreshes.
 - [ ] Session drill-down exposes parent/subagent attribution and usage provenance.
 - [ ] New complete usage records appear within one configured scan/refresh interval after Muse writes them; the dashboard shows last scan time, collection status, and coverage warnings.
@@ -78,10 +78,10 @@ The first objective is **visibility**, not enforcement. This project should not 
 **Happy path:**
 
 1. Use `muse` normally, in any project.
-2. Run `muse-cost scan` to import retained session usage.
-3. Run `muse-cost today`, `muse-cost month`, or `muse-cost sessions` for an explanation of where tokens and estimated dollars went.
-4. Run `muse-cost show` alongside Muse to observe usage updates, filter the dashboard, and drill into sessions. Updates reflect usage written to local logs, not provider billing. Use `muse-cost watch` for collection without the interactive dashboard.
-5. Periodically enter a dashboard-observed billed figure using `muse-cost reconcile` and inspect the difference.
+2. Run `meta-cost scan` to import retained session usage.
+3. Run `meta-cost today`, `meta-cost month`, or `meta-cost sessions` for an explanation of where tokens and estimated dollars went.
+4. Run `meta-cost show` alongside Muse to observe usage updates, filter the dashboard, and drill into sessions. Updates reflect usage written to local logs, not provider billing. Use `meta-cost watch` for collection without the interactive dashboard.
+5. Periodically enter a dashboard-observed billed figure using `meta-cost reconcile` and inspect the difference.
 
 > The initial implementation provides these commands. See [README.md](../README.md) for supported options and current limitations; this plan also includes work still awaiting validation.
 
@@ -138,7 +138,7 @@ The first objective is **visibility**, not enforcement. This project should not 
                          reconciliation
 ```
 
-**Implementation preferences:** Python 3.11+ (matches the current benchmark's language), standard-library `sqlite3`, `argparse`/Typer (choose during spike), `Decimal` for monetary calculations, Linux-first XDG paths. Use a local browser UI for the MVP dashboard, opened by `muse-cost show`. Preserve the optional terminal interface as `muse-cost tui`. Keep the collector, report queries, and dashboard separate so all views share accounting and filter semantics. The dashboard runs incremental scans while open and refreshes from SQLite; `watch` uses the same collection path. Use React components and React Router for the three browser pages. Keep shared filters in React state and tab session storage; page URLs contain only their path. Serve the prebuilt React bundle over loopback from Python, without a hosted backend or Node runtime requirement.
+**Implementation preferences:** Python 3.11+ (matches the current benchmark's language), standard-library `sqlite3`, `argparse`/Typer (choose during spike), `Decimal` for monetary calculations, Linux-first XDG paths. Use a local browser UI for the MVP dashboard, opened by `meta-cost show`. Preserve the optional terminal interface as `meta-cost tui`. Keep the collector, report queries, and dashboard separate so all views share accounting and filter semantics. The dashboard runs incremental scans while open and refreshes from SQLite; `watch` uses the same collection path. Use React components and React Router for the three browser pages. Keep shared filters in React state and tab session storage; page URLs contain only their path. Serve the prebuilt React bundle over loopback from Python, without a hosted backend or Node runtime requirement.
 
 **Proposed directories:**
 
@@ -273,40 +273,40 @@ Additional charges must be a distinct component **only when observed/estimable**
 
 ```bash
 # Import historical and new session usage
-muse-cost scan
+meta-cost scan
 
 # Open the live, filterable browser dashboard (scans while open)
-muse-cost show
-muse-cost show --interval 15 --period today
-muse-cost show --project my-project --model <model-id> --billing-mode payg
-muse-cost show --session <session-id>
-muse-cost show --from 2026-10-01 --to 2026-10-24
+meta-cost show
+meta-cost show --interval 15 --period today
+meta-cost show --project my-project --model <model-id> --billing-mode payg
+meta-cost show --session <session-id>
+meta-cost show --from 2026-10-01 --to 2026-10-24
 
 # View reports
-muse-cost today
-muse-cost week
-muse-cost month
-muse-cost sessions --sort estimated-cost
-muse-cost session <session-id>
-muse-cost models
-muse-cost projects
+meta-cost today
+meta-cost week
+meta-cost month
+meta-cost sessions --sort estimated-cost
+meta-cost session <session-id>
+meta-cost models
+meta-cost projects
 
 # Re-scan periodically while this WSL instance is running
-muse-cost watch --interval 15
+meta-cost watch --interval 15
 
 # Show coverage, parser health, unknown prices, and source discrepancies
-muse-cost doctor
+meta-cost doctor
 
 # Set warnings that DO NOT halt Meta-side usage
-muse-cost alert set --monthly-usd 30 --at 50,80,100
+meta-cost alert set --monthly-usd 30 --at 50,80,100
 
 # Enter an observed dashboard value (not automatic API sync)
-muse-cost reconcile add --date YYYY-MM-DD --amount 12.34 \
+meta-cost reconcile add --date YYYY-MM-DD --amount 12.34 \
   --currency CAD --kind outstanding-balance --scope team
 
 # Portable, secret-free reports
-muse-cost export --format csv --period month
-muse-cost export --format json --period month
+meta-cost export --format csv --period month
+meta-cost export --format json --period month
 ```
 
 ### Live browser dashboard behavior and validation
@@ -393,7 +393,7 @@ WARNING                     $30 local estimate alert is NOT a spend cap
 - [ ] Display freshness, collection errors, coverage gaps, and unknown/partial estimates.
 - [ ] Validate live updates alongside Muse and demonstrate idempotent repeated refreshes.
 
-**Exit gate:** Test fixtures produce deterministic calculations; a Muse session running alongside `muse-cost show` produces visible usage updates within one configured interval after complete records are written. Filters and drill-down explain the delta, and repeated refreshes do not double count. The UI never describes estimates as billed charges.
+**Exit gate:** Test fixtures produce deterministic calculations; a Muse session running alongside `meta-cost show` produces visible usage updates within one configured interval after complete records are written. Filters and drill-down explain the delta, and repeated refreshes do not double count. The UI never describes estimates as billed charges.
 
 ### Phase 3 — Warnings and manual reconciliation
 
@@ -487,4 +487,4 @@ These links were checked on **2026-10-24**; APIs, pricing and documented behavio
 
 ---
 
-**MVP definition of done:** With only local WSL Muse logs and a versioned pricing file, `muse-cost show` can display and filter **observed** interactive and headless usage as local logs update, preserve filters across refreshes without double counting, explain missing coverage or disputed totals, and display defensible **estimated** costs—without collecting secrets or misrepresenting estimated spend as Meta's actual bill.
+**MVP definition of done:** With only local WSL Muse logs and a versioned pricing file, `meta-cost show` can display and filter **observed** interactive and headless usage as local logs update, preserve filters across refreshes without double counting, explain missing coverage or disputed totals, and display defensible **estimated** costs—without collecting secrets or misrepresenting estimated spend as Meta's actual bill.

@@ -14,7 +14,7 @@ The cost center exists to explain cost, but the dashboard currently leads with t
 - **There is no cost over time.** The only chart plots tokens per day. The "Cost
   context" panel splits cost by billing mode, which is mostly `$0.00` because billing
   mode is usually unknown.
-- **Alerts are CLI-only and monthly-only.** `muse-cost alert set --monthly-usd` stores
+- **Alerts are CLI-only and monthly-only.** `meta-cost alert set --monthly-usd` stores
   one threshold in the `settings` table, and the warning appears only in CLI text
   reports. There is no daily limit, no per-project limit, and nothing in the UI.
 
@@ -100,7 +100,7 @@ returns, for each enabled alert: spend, limit, percent, level (`ok`, `warning` o
 
 `store.connect` moves an existing `settings.monthly_usd` into an all-projects monthly
 alert, using the levels below 100 from `alert_levels` as `warn_levels`, and then
-removes the old keys. `muse-cost alert set --monthly-usd` writes to the `alerts` table,
+removes the old keys. `meta-cost alert set --monthly-usd` writes to the `alerts` table,
 and CLI reports list exceeded and warning alerts from `alert_status`.
 
 ### 5.3 UI

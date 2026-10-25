@@ -15,7 +15,7 @@ import (
 )
 
 func main() {
-	root := "/tmp/muse-cost-demo"
+	root := "/tmp/meta-cost-demo"
 	if len(os.Args) > 1 {
 		root = os.Args[1]
 	}
@@ -26,7 +26,7 @@ func main() {
 	}
 	write(path, map[string]any{"payload_type": "runtime.session.metadata", "payload": map[string]any{"record": map[string]any{
 		"workspace_root": "/demo/sample-project", "model_id": "muse-spark-1.3"}}})
-	fmt.Printf("Synthetic logs: %s\nIn another terminal run:\nmuse-cost show --source %s --db %s --interval 1\n",
+	fmt.Printf("Synthetic logs: %s\nIn another terminal run:\nmeta-cost show --source %s --db %s --interval 1\n",
 		root, root, filepath.Join(root, "demo.sqlite3"))
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)

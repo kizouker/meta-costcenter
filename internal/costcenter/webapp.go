@@ -377,7 +377,7 @@ func (d *Dashboard) fail(w http.ResponseWriter, err error) {
 	case errors.As(err, &validation):
 		sendError(w, http.StatusBadRequest, validation.Message)
 	default:
-		fmt.Fprintf(os.Stderr, "muse-cost: dashboard: %v\n", err)
+		fmt.Fprintf(os.Stderr, "meta-cost: dashboard: %v\n", err)
 		sendError(w, http.StatusServiceUnavailable, "Usage database temporarily unavailable; retrying shortly.")
 	}
 }
@@ -443,7 +443,7 @@ func (d *Dashboard) report(f Filters, echo map[string]any, rates []Rate) (map[st
 	state := d.State()
 	warnings := append([]string{}, state.Warnings...)
 	if errorCount.Int64 > 0 {
-		warnings = append(warnings, fmt.Sprintf("%d malformed or unsupported records. Run muse-cost doctor for diagnostics.", errorCount.Int64))
+		warnings = append(warnings, fmt.Sprintf("%d malformed or unsupported records. Run meta-cost doctor for diagnostics.", errorCount.Int64))
 	}
 	var summaries int
 	if err := s.DB.QueryRow("SELECT COUNT(*) FROM summaries").Scan(&summaries); err != nil {

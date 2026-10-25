@@ -5,7 +5,7 @@ Track your tokens and cost, set more robust billing alarms, and integrates with 
 
 ![](./banner.png)
 
-![The Meta Cost Center dashboard](./muse-cost-control-screenshot.jpg)
+![The Meta Cost Center dashboard](./meta-cost-control-screenshot.jpg)
 
 Meta Cost Center tracks how much you use Muse Code and roughly what that usage would
 cost at API rates. It reads the usage records that Muse already keeps on your machine,
@@ -38,8 +38,8 @@ curl -fsSL https://raw.githubusercontent.com/omenking/meta-costcenter/main/insta
 ```
 
 The script downloads the archive for your architecture, checks it against the release's
-checksums, and installs the `muse-cost` binary; set `MUSE_COST_INSTALL_DIR` to install it
-somewhere else. If Go is installed, `go install github.com/omenking/meta-costcenter/cmd/muse-cost@latest`
+checksums, and installs the `meta-cost` binary; set `META_COST_INSTALL_DIR` to install it
+somewhere else. If Go is installed, `go install github.com/omenking/meta-costcenter/cmd/meta-cost@latest`
 builds the same binary into `~/go/bin` instead. Upgrading is a matter of running either
 command again, and the database and configuration carry over unchanged.
 
@@ -48,7 +48,7 @@ command again, and the database and configuration carry over unchanged.
 Run:
 
 ```bash
-muse-cost show
+meta-cost show
 ```
 
 This starts a local server and opens the dashboard at `http://127.0.0.1:8765/`. If that
@@ -64,9 +64,9 @@ other computers.
 Some useful variations:
 
 ```bash
-muse-cost show --port 8766      # use a specific port
-muse-cost show --port 0         # let the system pick a free port
-muse-cost show --no-browser     # print the URL without opening a browser
+meta-cost show --port 8766      # use a specific port
+meta-cost show --port 0         # let the system pick a free port
+meta-cost show --no-browser     # print the URL without opening a browser
 ```
 
 ## Using the dashboard
@@ -111,29 +111,29 @@ The dashboard is the main interface, but the same data is available as plain-tex
 reports. These are handy over SSH or in scripts.
 
 ```bash
-muse-cost today                         # today's usage
-muse-cost week                          # this week
-muse-cost month                         # this month
-muse-cost sessions --sort estimated-cost
-muse-cost session SESSION_ID            # one session in detail
-muse-cost projects
-muse-cost models
-muse-cost export --format csv --period month
-muse-cost export --format json --period all
-muse-cost scan                          # import new records without showing anything
-muse-cost watch --interval 15           # reprint reports on an interval
-muse-cost tui                           # interactive terminal dashboard
-muse-cost doctor                        # check sources and setup
+meta-cost today                         # today's usage
+meta-cost week                          # this week
+meta-cost month                         # this month
+meta-cost sessions --sort estimated-cost
+meta-cost session SESSION_ID            # one session in detail
+meta-cost projects
+meta-cost models
+meta-cost export --format csv --period month
+meta-cost export --format json --period all
+meta-cost scan                          # import new records without showing anything
+meta-cost watch --interval 15           # reprint reports on an interval
+meta-cost tui                           # interactive terminal dashboard
+meta-cost doctor                        # check sources and setup
 ```
 
 Most commands accept the same filters, and when you pass them to `show` they set the
 dashboard's starting view:
 
 ```bash
-muse-cost show --period month --interval 2
-muse-cost show --project my-project --model muse-spark-1.3
-muse-cost show --session SESSION_ID --period all
-muse-cost show --from 2026-10-01 --to 2026-10-24 --billing-mode payg
+meta-cost show --period month --interval 2
+meta-cost show --project my-project --model muse-spark-1.3
+meta-cost show --session SESSION_ID --period all
+meta-cost show --from 2026-10-01 --to 2026-10-24 --billing-mode payg
 ```
 
 Filter values must match labels exactly, and multiple filters are combined, so
@@ -148,7 +148,7 @@ These options work with every command:
 - `--config PATH` uses a different configuration file.
 - `--prices PATH` adds a pricing file (see [Estimated costs](#estimated-costs)).
 
-Run `muse-cost --help` or `muse-cost COMMAND --help` for the full list.
+Run `meta-cost --help` or `meta-cost COMMAND --help` for the full list.
 
 ## Projects and billing modes
 
@@ -220,7 +220,7 @@ You can also create a monthly alert from the command line. The following command
 $30 monthly limit for all projects with warnings at 50% and 80%:
 
 ```bash
-muse-cost alert set --monthly-usd 30 --at 50,80,100
+meta-cost alert set --monthly-usd 30 --at 50,80,100
 ```
 
 Alerts that have reached a warning level or their limit are also listed in the text
@@ -235,7 +235,7 @@ whose names start with `bootcamp-`, or `key1,key2` for specific keys. The same c
 from the command line:
 
 ```bash
-muse-cost alert set --monthly-usd 30 --revoke-keys 'bootcamp-*'
+meta-cost alert set --monthly-usd 30 --revoke-keys 'bootcamp-*'
 ```
 
 Cost Center itself never deletes anything. Keyguard reads the alerts with the following
@@ -243,14 +243,14 @@ command, which imports any new usage first and prints every alert's level and ke
 JSON, and it acts on them only when its own Cost Center check is turned on:
 
 ```bash
-muse-cost alert status --json
+meta-cost alert status --json
 ```
 
 The **Alerts** page shows what Keyguard is doing, which needs Cost Center to know how to run
-it. Add the path to your configuration file if `keyguard` is not on your `PATH`:
+it. Add the path to your configuration file if `meta-keyguard` is not on your `PATH`:
 
 ```toml
-keyguard_command = "/home/you/.local/bin/keyguard"
+keyguard_command = "/home/you/.local/bin/meta-keyguard"
 ```
 
 With that set, each alert that revokes keys shows one of three things: the keys it covers
@@ -259,7 +259,7 @@ right now, the keys Keyguard revoked for it in the current period, or, in red, w
 found). The alert bar adds the same information when a limit is exceeded. A Meta Keyguard
 panel lists the keys Keyguard manages and any failure it last reported, and the key match
 field in the alert dialog previews which current keys a pattern covers as you type. Cost
-Center reads all of this from `keyguard status --json`, which never contains a secret, and
+Center reads all of this from `meta-keyguard status --json`, which never contains a secret, and
 it runs that command only while an alert revokes keys or the Alerts page is open.
 
 ## Recording actual bills
@@ -270,9 +270,9 @@ Instead, you can record what your account actually shows so that both numbers ar
 side by side:
 
 ```bash
-muse-cost reconcile add --date 2026-10-24 --from 2026-10-01 --to 2026-10-24 \
+meta-cost reconcile add --date 2026-10-24 --from 2026-10-01 --to 2026-10-24 \
   --amount 12.34 --currency CAD --kind outstanding-balance --scope team
-muse-cost reconcile list
+meta-cost reconcile list
 ```
 
 ## Where data is stored
@@ -320,7 +320,7 @@ whereas exports leave them out so that they are safe to share.
 ### Building and testing
 
 ```bash
-go build -o muse-cost ./cmd/muse-cost   # embeds web/ and pricing.json into the binary
+go build -o meta-cost ./cmd/meta-cost   # embeds web/ and pricing.json into the binary
 go test ./...
 ```
 
@@ -330,7 +330,7 @@ database migrations, privacy, the Keyguard integration, the CLI, the terminal da
 None of them make model calls.
 
 Optional browser tests drive the dashboard in an installed copy of Google Chrome with
-Playwright. They build the binary with Go, or use the one named by `MUSE_COST`, and run it
+Playwright. They build the binary with Go, or use the one named by `META_COST`, and run it
 against a fixture of synthetic logs:
 
 ```bash
@@ -342,8 +342,9 @@ Set `CHROME_PATH` to use a browser other than the installed Google Chrome.
 
 ### Releases
 
-Releases are built by GoReleaser from `.goreleaser.yaml` (`goreleaser release` on a tag),
-which publishes the `muse-cost_linux_amd64.tar.gz` and `muse-cost_linux_arm64.tar.gz`
+Pushing a tag such as `v0.1.0` runs `.github/workflows/release.yml`, which builds the release
+with GoReleaser from `.goreleaser.yaml` and publishes the
+`meta-cost_linux_amd64.tar.gz` and `meta-cost_linux_arm64.tar.gz`
 archives that `install.sh` downloads. Changes to `web/` or `pricing.json` reach users
 only through a new binary, since both are embedded in it.
 
@@ -357,7 +358,7 @@ then rebuild the binary:
 ```bash
 npm ci --prefix frontend
 npm run build --prefix frontend
-go build -o muse-cost ./cmd/muse-cost
+go build -o meta-cost ./cmd/meta-cost
 ```
 
 The build uses esbuild and bundles React and React Router into a single local file, so

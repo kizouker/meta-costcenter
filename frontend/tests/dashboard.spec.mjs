@@ -1,5 +1,5 @@
-// End-to-end checks of the dashboard: `muse-cost show` over a fixture of logs, driven in Chrome.
-// Run with `npm run test:browser`. It builds the binary with Go unless MUSE_COST names one.
+// End-to-end checks of the dashboard: `meta-cost show` over a fixture of logs, driven in Chrome.
+// Run with `npm run test:browser`. It builds the binary with Go unless META_COST names one.
 import { test, expect } from '@playwright/test';
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -25,7 +25,7 @@ const jsonl = (records) => records.map((r) => JSON.stringify(r) + '\n').join('')
 let tmp, logs, server, base;
 
 test.beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'muse-cost-browser-'));
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'meta-cost-browser-'));
   logs = path.join(tmp, 'logs');
   ['Website', 'CLI tools', 'Research', 'Website'].forEach((project, i) => {
     const file = path.join(logs, `session-${i}`, 'session.jsonl');
@@ -38,10 +38,10 @@ test.beforeAll(async () => {
   fs.mkdirSync(path.dirname(sub), { recursive: true });
   fs.writeFileSync(sub, jsonl([metadata('Website'), ...[0, 1].map((j) => event(`sub-event-${j}`, 'sub-3a', 0, 0, 'muse-spark-1.3'))]));
 
-  let binary = process.env.MUSE_COST;
+  let binary = process.env.META_COST;
   if (!binary) {
-    binary = path.join(tmp, 'muse-cost');
-    execFileSync('go', ['build', '-o', binary, './cmd/muse-cost'], { cwd: repo, stdio: 'inherit' });
+    binary = path.join(tmp, 'meta-cost');
+    execFileSync('go', ['build', '-o', binary, './cmd/meta-cost'], { cwd: repo, stdio: 'inherit' });
   }
   server = spawn(binary, ['show', '--no-browser', '--port', '0', '--interval', '0.1', '--period', 'all',
     '--db', path.join(tmp, 'usage.sqlite3'), '--source', logs], {
@@ -55,7 +55,7 @@ test.beforeAll(async () => {
       const match = output.match(/Muse Cost dashboard: (http:\/\/\S+?)\/?\n/);
       if (match) resolve(match[1]);
     });
-    server.on('exit', (code) => reject(new Error(`muse-cost show exited ${code}: ${output}`)));
+    server.on('exit', (code) => reject(new Error(`meta-cost show exited ${code}: ${output}`)));
   });
 });
 
@@ -128,7 +128,7 @@ test('dashboard', async ({ page }) => {
   await expect(input).toHaveText('300,000');
   await project.selectOption('Website');
   await expect(input).toHaveText('150,000');
-  await page.screenshot({ path: path.join(os.tmpdir(), 'muse-cost-filters-desktop.png'), fullPage: true });
+  await page.screenshot({ path: path.join(os.tmpdir(), 'meta-cost-filters-desktop.png'), fullPage: true });
   await closeFilters();
   expect(page.url()).toBe(base + '/');
 
@@ -293,7 +293,7 @@ test('dashboard', async ({ page }) => {
   await expect(row).toContainText('Public rate');
   await page.locator('.nav', { hasText: 'Overview' }).click();
   await expect(input).toHaveText('301,234');
-  await page.screenshot({ path: path.join(os.tmpdir(), 'muse-cost-react-overview.png'), fullPage: true });
+  await page.screenshot({ path: path.join(os.tmpdir(), 'meta-cost-react-overview.png'), fullPage: true });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await openFilters();
@@ -302,7 +302,7 @@ test('dashboard', async ({ page }) => {
   await expect(input).toHaveText('90,000');
   await project.selectOption('Website');
   await expect(input).toHaveText('151,234');
-  await page.screenshot({ path: path.join(os.tmpdir(), 'muse-cost-filters-mobile.png'), fullPage: true });
+  await page.screenshot({ path: path.join(os.tmpdir(), 'meta-cost-filters-mobile.png'), fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.keyboard.press('Escape');
   await page.locator('.nav', { hasText: 'Breakdown' }).click();
