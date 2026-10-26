@@ -3,6 +3,7 @@ package costcenter
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,7 +23,7 @@ CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY, session TEXT, parent TEXT, project TEXT,
   recorded_at TEXT, model TEXT, billing_mode TEXT, input INTEGER,
   output INTEGER, cached INTEGER, source TEXT, sequence TEXT,
-  usage_status TEXT);
+  usage_status TEXT, key_label TEXT);
 CREATE INDEX IF NOT EXISTS events_time ON events(recorded_at);
 CREATE INDEX IF NOT EXISTS events_session ON events(session);
 CREATE TABLE IF NOT EXISTS metadata (source TEXT PRIMARY KEY, project TEXT, model TEXT);
@@ -40,7 +41,13 @@ CREATE TABLE IF NOT EXISTS rates (
 CREATE TABLE IF NOT EXISTS alerts (
   id INTEGER PRIMARY KEY, period TEXT, project TEXT, billing_mode TEXT,
   limit_usd TEXT, warn_levels TEXT DEFAULT '[80]', enabled INTEGER DEFAULT 1, created_at TEXT,
-  revoke_keys INTEGER DEFAULT 0, key_match TEXT);`
+  revoke_keys INTEGER DEFAULT 0, key_match TEXT);
+-- What the Muse SessionStart hook found about each session's credential. A resumed session can
+-- have several rows, because it may be resumed with a different credential.
+CREATE TABLE IF NOT EXISTS session_billing (
+  session TEXT, detected_at TEXT, billing_mode TEXT, source TEXT,
+  key_label TEXT, hook_source TEXT, detail TEXT,
+  PRIMARY KEY (session, detected_at));`
 
 // Store is the usage database. Its *sql.DB is safe for concurrent use by the dashboard.
 type Store struct {
@@ -48,7 +55,10 @@ type Store struct {
 	Path string
 }
 
-func OpenStore(path string) (*Store, error) {
+func OpenStore(path string) (*Store, error) { return openStore(path, 10000) }
+
+// openStore waits up to busyMS for a lock held by another process, such as a running dashboard.
+func openStore(path string, busyMS int) (*Store, error) {
 	path = expandHome(path)
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
@@ -65,7 +75,7 @@ func OpenStore(path string) (*Store, error) {
 		}
 		f.Close()
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)")
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=busy_timeout(%d)&_pragma=journal_mode(WAL)", path, busyMS))
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +84,8 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	for _, migrate := range []func() error{s.migrateWarnLevels, s.migrateKeyRevocation, s.migrateMonthlyWarning} {
+	for _, migrate := range []func() error{s.migrateWarnLevels, s.migrateKeyRevocation, s.migrateMonthlyWarning,
+		s.migrateKeyLabel} {
 		if err := migrate(); err != nil {
 			db.Close()
 			return nil, err
@@ -155,6 +166,16 @@ func (s *Store) migrateKeyRevocation() error {
 		}
 		return nil
 	})
+}
+
+// migrateKeyLabel: events record the Meta Keyguard key that paid for them, when the hook saw one.
+func (s *Store) migrateKeyLabel() error {
+	columns, err := s.columns("events")
+	if err != nil || columns["key_label"] {
+		return err
+	}
+	_, err = s.DB.Exec("ALTER TABLE events ADD COLUMN key_label TEXT")
+	return err
 }
 
 // migrateMonthlyWarning: the CLI used to store one monthly threshold in settings; it is now an ordinary alert.

@@ -113,6 +113,15 @@ var commands = []command{
 			help: "Ask Meta Keyguard to revoke keys matching PATTERN (*, bootcamp-*, or key1,key2) once the limit is exceeded"},
 		{name: "--json", dest: "json", help: "Print alert status as JSON (status always prints JSON)"}},
 		help: "Add a monthly alert, or print every alert's status as JSON"},
+	{name: "hook", positionals: []string{"action"},
+		choices: map[string][]string{"action": {"install", "uninstall", "status", "session-start"}}, options: []option{
+			{name: "--muse-settings", dest: "muse_settings", value: "PATH", help: "Muse settings file (default ~/.config/muse/settings.json)"}},
+		help: "Install the Muse hook that records each session's billing mode"},
+	{name: "billing", positionals: []string{"action"}, choices: map[string][]string{"action": {"backfill"}}, options: []option{
+		{name: "--mode", dest: "mode", value: "MODE", choices: []string{"payg", "subscription"}, help: "Billing mode to record"},
+		{name: "--before", dest: "before", value: "DATE", help: "Only sessions that started before this local date"},
+		{name: "--yes", dest: "yes", help: "Record the modes; without it, only list the sessions"}},
+		help: "Set the billing mode of sessions from before the hook"},
 }
 
 type args struct {
@@ -298,6 +307,11 @@ func Main(argv []string, assets Assets) int {
 		if errors.Is(err, errInterrupted) {
 			return 0
 		}
+		// Muse runs the SessionStart hook; a failure there must never disturb the session.
+		if a.command == "hook" && a.positionals["action"] == "session-start" {
+			fmt.Fprintf(os.Stderr, "meta-cost hook: billing mode not recorded: %v\n", err)
+			return 0
+		}
 		fmt.Fprintf(os.Stderr, "meta-cost: %v\n", err)
 		return 1
 	}
@@ -389,7 +403,7 @@ func run(a args, assets Assets, out io.Writer, interrupted <-chan struct{}) erro
 	}
 	filters := Filters{Period: period, Project: a.get("project"), Model: a.get("model"), Session: session,
 		BillingMode: a.get("billing_mode"), Sort: a.get("sort")}
-	if cmd != "reconcile" && cmd != "alert" {
+	if cmd != "reconcile" && cmd != "alert" && cmd != "hook" && cmd != "billing" {
 		filters.From, filters.To = a.get("from"), a.get("to")
 		if _, _, err := bounds(filters); err != nil {
 			return err
@@ -401,6 +415,14 @@ func run(a args, assets Assets, out io.Writer, interrupted <-chan struct{}) erro
 	}
 	if a.has("db") {
 		dbPath = a.get("db")
+	}
+	settingsPath := museSettingsPath()
+	if a.has("muse_settings") {
+		settingsPath = expandHome(a.get("muse_settings"))
+	}
+	if cmd == "hook" && a.positionals["action"] == "session-start" {
+		HookSessionStart(os.Stdin, dbPath, os.Stderr)
+		return nil
 	}
 	store, err := OpenStore(dbPath)
 	if err != nil {
@@ -415,6 +437,10 @@ func run(a args, assets Assets, out io.Writer, interrupted <-chan struct{}) erro
 		return reconcile(store, a, out)
 	case "alert":
 		return alert(store, a, roots, config, rates, out)
+	case "hook":
+		return hook(store, a, settingsPath, configPath, config, out)
+	case "billing":
+		return backfill(store, a, roots, config, out)
 	case "show":
 		port := 8765
 		if a.has("port") {
@@ -461,8 +487,12 @@ func run(a args, assets Assets, out io.Writer, interrupted <-chan struct{}) erro
 			if err != nil {
 				return err
 			}
+			billing, err := store.BillingDiagnostics(settingsPath, config.Sessions)
+			if err != nil {
+				return err
+			}
 			printJSON(out, map[string]any{"scan": result, "sources": sources, "reconciliation": reconciliation,
-				"pricing_rates": len(rates), "limitations": []string{"No account-wide coverage", "No supported live billing sync",
+				"pricing_rates": len(rates), "billing_detection": billing, "limitations": []string{"No account-wide coverage", "No supported live billing sync",
 					"run.usage upstream shape unverified; unsupported records are diagnosed",
 					"Source replacements retain historical observations; provenance may be unavailable"}})
 		case "export":
@@ -683,6 +713,93 @@ func alert(store *Store, a args, roots []string, config Config, rates []Rate, ou
 	}
 	fmt.Fprintf(out, "Added a monthly alert for %s: USD %s of estimated local usage, priced at API rates. %s\n"+
 		"Manage alerts on the dashboard Alerts page.\n", scope, value, action)
+	return nil
+}
+
+func hook(store *Store, a args, settingsPath, configPath string, config Config, out io.Writer) error {
+	switch a.positionals["action"] {
+	case "install":
+		command, err := hookCommandLine(store.Path, configPath)
+		if err != nil {
+			return err
+		}
+		changed, err := InstallHook(settingsPath, command)
+		if err != nil {
+			return err
+		}
+		if changed {
+			fmt.Fprintf(out, "Installed the billing mode hook in %s (a copy of the previous file is in %s.meta-cost.bak).\n"+
+				"Sessions started from now on record whether they use the subscription or an API key.\n", settingsPath, settingsPath)
+		} else {
+			fmt.Fprintf(out, "The billing mode hook is already installed in %s.\n", settingsPath)
+		}
+	case "uninstall":
+		changed, err := UninstallHook(settingsPath)
+		if err != nil {
+			return err
+		}
+		if changed {
+			fmt.Fprintf(out, "Removed the billing mode hook from %s. New sessions will be recorded as unknown.\n", settingsPath)
+		} else {
+			fmt.Fprintf(out, "The billing mode hook is not installed in %s.\n", settingsPath)
+		}
+	case "status":
+		diagnostics, err := store.BillingDiagnostics(settingsPath, config.Sessions)
+		if err != nil {
+			return err
+		}
+		printJSON(out, diagnostics)
+	}
+	return nil
+}
+
+func backfill(store *Store, a args, roots []string, config Config, out io.Writer) error {
+	if !a.has("mode") || !a.has("before") {
+		return fmt.Errorf("--mode and --before are required")
+	}
+	before, err := parseDate(a.get("before"))
+	if err != nil {
+		return err
+	}
+	// Fresh usage first, so that sessions the hook has seen since the last scan are not listed.
+	if _, err := store.Scan(roots, config.Sessions); err != nil {
+		return err
+	}
+	sessions, err := store.UndetectedBefore(dateString(before))
+	if err != nil {
+		return err
+	}
+	var skipped []UndetectedSession
+	var chosen []UndetectedSession
+	for _, u := range sessions {
+		if meta, ok := config.Sessions[u.Session]; ok && meta.BillingMode != nil {
+			skipped = append(skipped, u)
+		} else {
+			chosen = append(chosen, u)
+		}
+	}
+	if len(chosen) == 0 {
+		fmt.Fprintf(out, "No sessions before %s are missing a billing mode.\n", dateString(before))
+		return nil
+	}
+	if !a.has("yes") {
+		for _, u := range chosen {
+			fmt.Fprintf(out, "%s  %s  %s\n", localDay(u.Started), u.Session, u.Project)
+		}
+		fmt.Fprintf(out, "\n%d session(s) would be recorded as %s, with their subagents. Run again with --yes to record them.\n",
+			len(chosen), a.get("mode"))
+		return nil
+	}
+	if err := store.Backfill(chosen, a.get("mode")); err != nil {
+		return err
+	}
+	if _, err := store.Scan(roots, config.Sessions); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Recorded %d session(s) as %s.\n", len(chosen), a.get("mode"))
+	if len(skipped) > 0 {
+		fmt.Fprintf(out, "Left %d session(s) alone because the config file sets their billing mode.\n", len(skipped))
+	}
 	return nil
 }
 

@@ -154,6 +154,8 @@ test('dashboard', async ({ page }) => {
   await expect(page.locator('.chip-note')).toBeVisible();
   await expect(page.locator('#event-rows tr')).toHaveCount(5);
   await expect(page.locator('#subagent-tree')).toContainText('sub-3a');
+  // No hook ran for the fixture, so the page explains how billing modes get recorded.
+  await expect(page.locator('#billing-source')).toContainText('meta-cost hook install');
   fs.appendFileSync(path.join(logs, 'session-3', 'session.jsonl'), jsonl([event('new-live', 'session-3', 1234, 100, 'muse-spark-1.3')]));
   await expect(page.locator('#event-rows tr')).toHaveCount(6, { timeout: 10_000 });
   await expect(page.locator('#event-rows')).toContainText('new-live');

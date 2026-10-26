@@ -147,6 +147,7 @@ type Row struct {
 	Source      string  `json:"-"`
 	Sequence    string  `json:"sequence"`
 	UsageStatus string  `json:"usage_status"`
+	KeyLabel    *string `json:"key_label"`
 }
 
 // field is a row's value for a grouping or filter field.
@@ -330,7 +331,7 @@ func (s *Store) inheritedProjects(parents parentMap) (map[string]string, error) 
 
 func (s *Store) allRows() ([]Row, error) {
 	rows, err := s.DB.Query("SELECT id, session, parent, project, recorded_at, model, billing_mode, input, output, cached, " +
-		"source, sequence, usage_status FROM events ORDER BY recorded_at, id")
+		"source, sequence, usage_status, key_label FROM events ORDER BY recorded_at, id")
 	if err != nil {
 		return nil, err
 	}
@@ -338,10 +339,10 @@ func (s *Store) allRows() ([]Row, error) {
 	var result []Row
 	for rows.Next() {
 		var r Row
-		var id, session, parent, project, recorded, model, billing, source, sequence, status sql.NullString
+		var id, session, parent, project, recorded, model, billing, source, sequence, status, keyLabel sql.NullString
 		var input, output, cached sql.NullInt64
 		if err := rows.Scan(&id, &session, &parent, &project, &recorded, &model, &billing, &input, &output, &cached,
-			&source, &sequence, &status); err != nil {
+			&source, &sequence, &status, &keyLabel); err != nil {
 			return nil, err
 		}
 		r.ID, r.Session, r.Project, r.RecordedAt = id.String, session.String, project.String, recorded.String
@@ -354,6 +355,10 @@ func (s *Store) allRows() ([]Row, error) {
 		if cached.Valid {
 			c := cached.Int64
 			r.Cached = &c
+		}
+		if keyLabel.Valid {
+			k := keyLabel.String
+			r.KeyLabel = &k
 		}
 		result = append(result, r)
 	}
@@ -656,7 +661,7 @@ func exportRows(rows []Row, rates []Rate) []ExportRow {
 }
 
 var exportFields = []string{"id", "session", "parent", "project", "recorded_at", "model", "billing_mode", "input", "output",
-	"cached", "sequence", "usage_status", "estimated_api_equivalent_usd", "pricing_snapshot", "rate_assumed"}
+	"cached", "sequence", "usage_status", "estimated_api_equivalent_usd", "pricing_snapshot", "rate_assumed", "key_label"}
 
 // csvRecord writes an export row as Python's csv module did: None as empty, booleans as True/False.
 func (e ExportRow) csvRecord() []string {
@@ -675,7 +680,8 @@ func (e ExportRow) csvRecord() []string {
 		assumed = "True"
 	}
 	return []string{e.ID, e.Session, opt(e.Parent), e.Project, e.RecordedAt, e.Model, e.BillingMode, fmt.Sprint(e.Input),
-		fmt.Sprint(e.Output), cached, e.Sequence, e.UsageStatus, opt(e.EstimatedAPIEquivalentUSD), opt(e.PricingSnapshot), assumed}
+		fmt.Sprint(e.Output), cached, e.Sequence, e.UsageStatus, opt(e.EstimatedAPIEquivalentUSD), opt(e.PricingSnapshot), assumed,
+		opt(e.KeyLabel)}
 }
 
 type TreeNode struct {
@@ -686,20 +692,23 @@ type TreeNode struct {
 }
 
 type SessionDetail struct {
-	ID           string          `json:"id"`
-	Parent       *string         `json:"parent"`
-	Root         string          `json:"root"`
-	Project      *string         `json:"project"`
-	Started      *string         `json:"started"`
-	LastActivity *string         `json:"last_activity"`
-	BillingModes []string        `json:"billing_modes"`
-	Totals       Totals          `json:"totals"`
-	Own          Totals          `json:"own"`
-	Timeline     []TimelinePoint `json:"timeline"`
-	TimelineUnit string          `json:"timeline_unit"`
-	Tree         *TreeNode       `json:"tree"`
-	Models       []Group         `json:"models"`
-	Events       []EstimatedRow  `json:"events"`
+	ID           string   `json:"id"`
+	Parent       *string  `json:"parent"`
+	Root         string   `json:"root"`
+	Project      *string  `json:"project"`
+	Started      *string  `json:"started"`
+	LastActivity *string  `json:"last_activity"`
+	BillingModes []string `json:"billing_modes"`
+	// BillingDetections are what the Muse hook found for this session, or for the nearest ancestor
+	// when a subagent has none of its own.
+	BillingDetections []DetectionRow  `json:"billing_detections"`
+	Totals            Totals          `json:"totals"`
+	Own               Totals          `json:"own"`
+	Timeline          []TimelinePoint `json:"timeline"`
+	TimelineUnit      string          `json:"timeline_unit"`
+	Tree              *TreeNode       `json:"tree"`
+	Models            []Group         `json:"models"`
+	Events            []EstimatedRow  `json:"events"`
 }
 
 func optional(s string) *string {
@@ -773,9 +782,18 @@ func (s *Store) SessionDetail(session string, f Filters, rates []Rate) (*Session
 	if project.Valid {
 		projectPtr = &project.String
 	}
+	detections, err := s.SessionDetections(session)
+	for node, seen := parents[session], map[string]bool{session: true}; err == nil && len(detections) == 0 && node != "" && !seen[node]; node = parents[node] {
+		seen[node] = true
+		detections, err = s.SessionDetections(node)
+	}
+	if err != nil {
+		return nil, err
+	}
 	return &SessionDetail{ID: session, Parent: optional(parents[session]), Root: roots(parents)[session], Project: projectPtr,
-		Started: started, LastActivity: last, BillingModes: ranked(rows, "billing_mode"), Totals: totals(rows, rates),
-		Own: totals(bySession[session], rates), Timeline: timeline(rows, rates, unit), TimelineUnit: unit,
+		Started: started, LastActivity: last, BillingModes: ranked(rows, "billing_mode"), BillingDetections: detections,
+		Totals: totals(rows, rates),
+		Own:    totals(bySession[session], rates), Timeline: timeline(rows, rates, unit), TimelineUnit: unit,
 		Tree: node(session, map[string]bool{}), Models: grouped(rows, "model", rates), Events: withEstimates(rows, rates)}, nil
 }
 

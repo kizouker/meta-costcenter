@@ -1,6 +1,9 @@
 export const EMPTY = { period: 'today', from: '', to: '', project: '', model: '', session: '', billing_mode: '' };
 export const PERIODS = { today: 'Today', week: 'Last 7 days', month: 'This month', all: 'All time' };
 export const BILLING_MODES = { payg: 'Pay as you go', subscription: 'Subscription', unknown: 'Unknown' };
+// How the Muse hook decided a session's billing mode.
+export const BILLING_SOURCES = { env_key: 'META_API_KEY was set', stdin_key: 'API key passed on stdin', stored_key: 'API key stored with muse auth',
+  account_login: 'Meta account login with an active subscription', undetermined: 'could not be determined', backfill: 'set with meta-cost billing backfill' };
 
 export const number = value => Number(value || 0).toLocaleString();
 export const compact = value => Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value || 0));

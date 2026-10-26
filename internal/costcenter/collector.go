@@ -474,7 +474,8 @@ func ingestLine(st *ingestStatements, line []byte, start int64, source, session,
 	if project == "unassigned" {
 		eventProject = *detectedProject
 	}
-	insert, err := st.prepare(&st.event, "INSERT OR IGNORE INTO events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+	insert, err := st.prepare(&st.event, "INSERT OR IGNORE INTO events (id, session, parent, project, recorded_at, model, billing_mode, input, output, "+
+		"cached, source, sequence, usage_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
 	if err != nil {
 		return 0, err
 	}
@@ -613,8 +614,12 @@ func (s *Store) Scan(roots []string, sessions map[string]SessionMeta) (ScanResul
 		}
 		added += n
 	}
-	// Explicit metadata mappings also apply to previously imported observations.
+	// Detected billing modes are applied first so that explicit metadata mappings, which also apply to
+	// previously imported observations, override them.
 	err := s.inTx(func(tx *sql.Tx) error {
+		if err := applyDetections(tx, sessions); err != nil {
+			return err
+		}
 		for sid, meta := range sessions {
 			if meta.Project != nil {
 				if _, err := tx.Exec("UPDATE events SET project=? WHERE session=?", *meta.Project, sid); err != nil {

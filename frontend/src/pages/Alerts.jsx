@@ -194,10 +194,11 @@ export default function Alerts({ options, onPreview }) {
             <span className="alert-status">{alert.level === 'paused' ? 'Paused' : `${usd(alert.spent_usd)} of ${usd(alert.limit_usd)} ${windowText(alert)}`}</span></div>
           <div className="alert-meter" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(alert.percent, 100)} aria-label={`${alert.percent}% of limit`}>
             <span style={{ width: Math.min(alert.percent, 100) + '%' }} />{alert.warn_levels.map(value => <i key={value} style={{ left: value + '%' }} title={`Warns at ${value}%`} />)}</div>
-          <div className="alert-details"><span>{alert.percent}% used · warns at {alert.warn_levels.map(value => value + '%').join(', ')}{alert.revoke_keys ? ` · revokes keys matching ${alert.key_match}` : ''}{alert.unpriced_events ? ` · ${number(alert.unpriced_events)} unpriced completions not counted` : ''}</span>
+          <div className="alert-details"><span>{alert.percent}% used · warns at {alert.warn_levels.map(value => value + '%').join(', ')}{alert.revoke_keys ? ` · revokes keys matching ${alert.key_match}` : ''}{alert.unpriced_events ? ` · ${number(alert.unpriced_events)} unpriced completions not counted` : ''}{alert.unknown_billing_events ? ` · ${number(alert.unknown_billing_events)} completions with unknown billing mode not counted` : ''}</span>
             <span className="row-actions"><button type="button" className="small-button" onClick={() => setDialog({ id: alert.id, period: alert.period, project: alert.project || '', billing_mode: alert.billing_mode || '', limit_usd: alert.limit_usd, warn_levels: alert.warn_levels, enabled: alert.enabled, revoke_keys: alert.revoke_keys, key_match: alert.key_match || '*' })}>Edit</button>
               <button type="button" className="small-button" onClick={() => toggle(alert)}>{alert.enabled ? 'Pause' : 'Resume'}</button>
               <button type="button" className="small-button" onClick={() => remove(alert)}>Delete</button></span></div>
+          {alert.unknown_billing_events > 0 && <p className="keyguard-status warn billing-unknown">This alert counts only pay-as-you-go usage, but {number(alert.unknown_billing_events)} completion(s) in this window have no recorded billing mode, so they are not counted. Run <code>meta-cost hook install</code> so that new Muse sessions record whether they use the subscription or an API key.</p>}
           <KeyguardStatus alert={alert} />
         </li>)}</ul>}
     </section>

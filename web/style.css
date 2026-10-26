@@ -497,6 +497,7 @@ button:disabled { opacity: 1; background: #e5e7eb; color: #374151; cursor: wait;
 .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px 20px; margin: 0; }
 .facts dt { font-size: 16px; color: #293548; }
 .facts dd { margin: 2px 0 0; font-size: 18px; font-weight: 600; }
+.billing-source { display: block; margin-top: 2px; font-size: 14px; font-weight: 400; color: #293548; max-width: 48ch; }
 .metric-link { display: block; color: inherit; }
 .metric-link:hover { border-color: #00533d; box-shadow: 0 2px 8px #00533d22; }
 .panel-link { font-size: 16px; color: #00533d; text-decoration: underline; font-weight: 600; }
@@ -642,6 +643,7 @@ body { padding-top: var(--alert-bar, 0px); }
 .keyguard-status.done { color: #00533d; font-weight: 600; }
 .keyguard-status.warn, .keyguard-preview.warn { color: #624300; }
 .keyguard-status.bad, .keyguard-preview.bad { color: #8a2014; font-weight: 600; }
+.billing-unknown code { font-size: 14px; }
 .keyguard-warning { color: #624300; font-weight: 400; }
 #keyguard table { margin-top: 4px; }
 #keyguard > .notice { margin: 0 22px 18px; }

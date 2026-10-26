@@ -237,26 +237,28 @@ func describe(period string, project, billingMode *string) string {
 // AlertStatus is an alert with its current spend. Meta Keyguard reads these from
 // `meta-cost alert status --json` to decide which keys to revoke.
 type AlertStatus struct {
-	ID             int64          `json:"id"`
-	Period         string         `json:"period"`
-	Project        *string        `json:"project"`
-	BillingMode    *string        `json:"billing_mode"`
-	LimitUSD       string         `json:"limit_usd"`
-	WarnLevels     []int          `json:"warn_levels"`
-	Enabled        bool           `json:"enabled"`
-	CreatedAt      *string        `json:"created_at"`
-	RevokeKeys     bool           `json:"revoke_keys"`
-	KeyMatch       *string        `json:"key_match"`
-	WarningAt      *int           `json:"warning_at"`
-	Label          string         `json:"label"`
-	WindowStart    string         `json:"window_start"`
-	WindowEnd      string         `json:"window_end"`
-	SpentUSD       Dec            `json:"spent_usd"`
-	Percent        pyFloatJSON    `json:"percent"`
-	Level          string         `json:"level"`
-	UnpricedEvents int            `json:"unpriced_events"`
-	AssumedEvents  int            `json:"assumed_events"`
-	Keyguard       map[string]any `json:"keyguard,omitempty"`
+	ID             int64       `json:"id"`
+	Period         string      `json:"period"`
+	Project        *string     `json:"project"`
+	BillingMode    *string     `json:"billing_mode"`
+	LimitUSD       string      `json:"limit_usd"`
+	WarnLevels     []int       `json:"warn_levels"`
+	Enabled        bool        `json:"enabled"`
+	CreatedAt      *string     `json:"created_at"`
+	RevokeKeys     bool        `json:"revoke_keys"`
+	KeyMatch       *string     `json:"key_match"`
+	WarningAt      *int        `json:"warning_at"`
+	Label          string      `json:"label"`
+	WindowStart    string      `json:"window_start"`
+	WindowEnd      string      `json:"window_end"`
+	SpentUSD       Dec         `json:"spent_usd"`
+	Percent        pyFloatJSON `json:"percent"`
+	Level          string      `json:"level"`
+	UnpricedEvents int         `json:"unpriced_events"`
+	AssumedEvents  int         `json:"assumed_events"`
+	// UnknownBillingEvents are completions a pay-as-you-go alert cannot count because no billing mode was recorded.
+	UnknownBillingEvents int            `json:"unknown_billing_events"`
+	Keyguard             map[string]any `json:"keyguard,omitempty"`
 }
 
 // AlertStatuses is the current spend against every alert. Unpriced usage is excluded, so spend is a lower bound.
@@ -316,10 +318,15 @@ func (s *Store) AlertStatuses(rates []Rate, day time.Time) ([]AlertStatus, error
 	for i := range result {
 		a := &result[i]
 		var items []Row
+		scoped := a.BillingMode != nil && *a.BillingMode != ""
 		for _, r := range usage {
-			if localDay(r.RecordedAt) >= a.WindowStart && (a.Project == nil || *a.Project == "" || r.Project == *a.Project) &&
-				(a.BillingMode == nil || *a.BillingMode == "" || r.BillingMode == *a.BillingMode) {
+			if localDay(r.RecordedAt) < a.WindowStart || (a.Project != nil && *a.Project != "" && r.Project != *a.Project) {
+				continue
+			}
+			if !scoped || r.BillingMode == *a.BillingMode {
 				items = append(items, r)
+			} else if r.BillingMode == "unknown" {
+				a.UnknownBillingEvents++
 			}
 		}
 		t := totals(items, rates)

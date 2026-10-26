@@ -159,10 +159,35 @@ of the session that started them. The tool never guesses a project from the cont
 your prompts.
 
 The billing mode records whether a session was paid through a subscription or
-pay-as-you-go (`payg`). Muse does not log this, so every session starts as `unknown`
-until you set it. Both the project and the billing mode can be set per session in the
-configuration file, which lives at `~/.config/meta-cost-center/config.toml` by default
-(or under `$XDG_CONFIG_HOME` if you have set it):
+pay-as-you-go (`payg`). Muse does not log which credential a session used, so Cost
+Center records it with a Muse `SessionStart` hook, which you install once:
+
+```bash
+meta-cost hook install      # adds the hook to ~/.config/muse/settings.json
+meta-cost hook status       # shows whether it is installed and when it last recorded a session
+meta-cost hook uninstall    # removes only the entry that install added
+```
+
+When a session starts, the hook looks at how Muse was started and records the session
+as pay-as-you-go if a `META_API_KEY` environment variable, `--api-key-stdin`, or an API
+key saved with `muse auth set` is in use, because Muse prefers each of these over the
+account login. Otherwise, if Muse is logged in to a Meta account with an active
+subscription, the session is recorded as subscription. When the key came from
+`meta-keyguard exec` or `meta-keyguard env`, the hook also records the key's label,
+which the session page shows. The hook only checks whether a key is present and never
+reads or stores its value. It needs Linux or WSL, because it reads the Muse process's
+details from `/proc`.
+
+Sessions from before the hook was installed stay `unknown`. If you know how they were
+paid, `meta-cost billing backfill --mode subscription --before 2026-10-26` lists them,
+and adding `--yes` records them. `meta-cost doctor` warns when the hook is not installed
+or when recent sessions have no recorded billing mode, which would suggest that a Muse
+update stopped running it.
+
+Both the project and the billing mode can also be set per session in the configuration
+file, which overrides anything the hook recorded. The file lives at
+`~/.config/meta-cost-center/config.toml` by default (or under `$XDG_CONFIG_HOME` if you
+have set it):
 
 ```toml
 [sessions."your-session-id"]

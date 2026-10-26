@@ -2,10 +2,17 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useResource } from '../api.js';
 import { ChartPanel, EmptyRow, Metric, ModelsTable, NotFound, Share, TotalsMetrics } from '../components.jsx';
-import { BILLING_MODES, cost, dateTime, duration, filterQuery, number, percent, periodLabel, periodOnly, shortId, tokens } from '../format.js';
+import { BILLING_MODES, BILLING_SOURCES, cost, dateTime, duration, filterQuery, number, percent, periodLabel, periodOnly, shortId, tokens } from '../format.js';
 
 const PAGE = 100;
 const sessionLink = id => '/sessions/' + encodeURIComponent(id);
+
+/** How the billing mode was found: the Muse hook's detections, or a hint when there are none. */
+function BillingSource({ detections }) {
+  if (!detections?.length) return <span className="billing-source" id="billing-source">Not detected. Sessions record their billing mode once the Muse hook is installed with meta-cost hook install.</span>;
+  return <span className="billing-source" id="billing-source">{detections.map(d => `${BILLING_MODES[d.billing_mode] || d.billing_mode}: ${BILLING_SOURCES[d.source] || d.source}`
+    + (d.key_label ? `, Keyguard key ${d.key_label}` : '') + (d.hook_source === 'resume' ? ' (resumed)' : '') + ` at ${dateTime(d.detected_at)}`).join('; ')}</span>;
+}
 
 function TreeNode({ node, total, current }) {
   return <li>
@@ -47,7 +54,7 @@ export default function SessionDetail({ filters, setFilters }) {
         <div><dt>Started</dt><dd>{dateTime(data.started)}</dd></div>
         <div><dt>Last activity</dt><dd>{dateTime(data.last_activity)}</dd></div>
         <div><dt>Duration</dt><dd>{duration(data.started, data.last_activity)}</dd></div>
-        <div><dt>Billing</dt><dd>{data.billing_modes.map(mode => BILLING_MODES[mode] || mode).join(', ') || '—'}</dd></div>
+        <div><dt>Billing</dt><dd>{data.billing_modes.map(mode => BILLING_MODES[mode] || mode).join(', ') || '—'}<BillingSource detections={data.billing_detections} /></dd></div>
       </dl>
     </section>
     {!t.events && <NoUsageInPeriod filters={filters} setFilters={setFilters} subject="session" />}
