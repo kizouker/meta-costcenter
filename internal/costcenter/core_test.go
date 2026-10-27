@@ -764,3 +764,37 @@ func TestDecimalTextMatchesPython(t *testing.T) {
 		t.Errorf("Fixed rounds half to even: %s", got)
 	}
 }
+
+func TestFileIdentity(t *testing.T) {
+	dir := t.TempDir()
+	a, b := filepath.Join(dir, "a.jsonl"), filepath.Join(dir, "b.jsonl")
+	for _, p := range []string{a, b} {
+		if err := os.WriteFile(p, []byte("x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	idA, sizeA, err := fileIdentity(a)
+	if err != nil || sizeA != 2 {
+		t.Fatalf("fileIdentity(a) = %q, %d, %v", idA, sizeA, err)
+	}
+	if again, _, _ := fileIdentity(a); again != idA {
+		t.Errorf("identity not stable: %q then %q", idA, again)
+	}
+	if idB, _, _ := fileIdentity(b); idB == idA {
+		t.Errorf("different files share identity %q", idA)
+	}
+	moved := filepath.Join(dir, "moved.jsonl")
+	if err := os.Rename(a, moved); err != nil {
+		t.Fatal(err)
+	}
+	if id, _, _ := fileIdentity(moved); id != idA {
+		t.Errorf("rename changed identity: %q -> %q", idA, id)
+	}
+	// Keep the old inode alive so it cannot be reused by the replacement file.
+	if err := os.WriteFile(a, []byte("y\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if id, _, _ := fileIdentity(a); id == idA {
+		t.Errorf("replacement file kept identity %q", idA)
+	}
+}
