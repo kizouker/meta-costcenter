@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -643,8 +644,11 @@ func openBrowser(target string) bool {
 			return false
 		}
 	}
+	if runtime.GOOS == "darwin" {
+		return run("open", target)
+	}
 	return run("wslview", target) || run("powershell.exe", "-NoProfile", "-Command", "Start-Process", target) ||
-		run("xdg-open", target) || run("open", target)
+		run("xdg-open", target)
 }
 
 // RunDashboard serves the dashboard until interrupted, falling back to a free port when the
