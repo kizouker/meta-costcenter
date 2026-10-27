@@ -7,8 +7,9 @@ repo=omenking/meta-costcenter
 dir=${META_COST_INSTALL_DIR:-$HOME/.local/bin}
 
 case "$(uname -s)" in
-  Linux) ;;
-  *) echo "meta-cost runs on Linux (including WSL); this system is $(uname -s)" >&2; exit 1 ;;
+  Linux) os=linux ;;
+  Darwin) os=darwin ;;
+  *) echo "meta-cost runs on Linux, WSL, or macOS; this system is $(uname -s)" >&2; exit 1 ;;
 esac
 case "$(uname -m)" in
   x86_64 | amd64) arch=amd64 ;;
@@ -16,7 +17,12 @@ case "$(uname -m)" in
   *) echo "No meta-cost release for $(uname -m)" >&2; exit 1 ;;
 esac
 
-archive=meta-cost_linux_$arch.tar.gz
+if [ "$os" = darwin ] && [ "$arch" != arm64 ]; then
+  echo "On macOS, meta-cost is released for Apple Silicon (arm64) only" >&2
+  exit 1
+fi
+
+archive=meta-cost_${os}_$arch.tar.gz
 base=https://github.com/$repo/releases/latest/download
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
