@@ -1,8 +1,8 @@
 {
   "branch": "macos-arm64-port",
   "stage": "implementation-first-fixes",
-  "last_thought": "PTY test tagged linux-only, fileIdentity test added, browser opener is OS-aware, darwin/amd64 dropped from release, macOS install doc written. go vet, gofmt and go test pass on macOS arm64. Nothing is committed.",
-  "immediate_next_micro_step": "Run `meta-cost tui --once --period all` in Terminal.app to verify MCC-REQ-002-S01, then commit the working tree in small commits.",
+  "last_thought": "Seven small commits are on macos-arm64-port (not pushed). Checks pass on macOS arm64. HANDOVER.MD lists tasks for Codex, one at a time.",
+  "immediate_next_micro_step": "Task 1 in HANDOVER.MD: run `meta-cost tui --once --period all` in Terminal.app and report the output.",
   "open_questions": [
     "Which billing-mode behaviors are supported on macOS without Linux /proc data? Design a ProcessInspector with an explicit unknown result.",
     "What project-owner guidance is needed from ExamPro/Andrew?",

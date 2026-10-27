@@ -1,44 +1,38 @@
 # Handover: Meta Cost Center macOS arm64 port
 
-## Context
+Read `state.json` first. Take **one task at a time** from the list below. Respond to the human in Swedish; code and comments in English. Max 10 lines per response.
 
-The goal is to determine how far `github.com/omenking/meta-costcenter` can be ported to macOS arm64, while preserving explicit limitations for Linux-only behavior. The work is being done in the fork `kizouker/meta-costcenter`, branch `macos-arm64-port`.
+## State (2026-10-27)
 
-## Current state
+- Branch `macos-arm64-port`, seven local commits, **not pushed**. Working tree clean.
+- Verified on macOS arm64: `go vet ./...`, `gofmt -l .`, `go test ./...`, and cross-builds for linux/arm64 and darwin/arm64 (`CGO_ENABLED=0`).
+- Not verified: anything in a real terminal, a published release, Linux CI, Keyguard on macOS.
 
-- The branch has been pushed to the fork.
-- The local working tree contains uncommitted porting and documentation changes; these must be preserved.
-- The requirements are in `specs/requirements.md` as Gherkin-style scenarios.
-- The architecture draft is in `design/SAD.md`.
-- The first System Context view exists as `design/system-context.puml` and `design/workspace.dsl`.
-- Local tickets and GitHub issues exist for the macOS port requirements.
-- Full macOS verification is not complete yet.
+## Done
 
-## Changes already present
+- Terminal ioctls split into `tui_terminal_{linux,darwin}.go` (`x/sys/unix`).
+- `cmd/meta-cost/main_test.go` is `//go:build linux` (Linux PTY constants).
+- `TestFileIdentity` added; the `Stat_t.Dev` concern is unproven, not a defect.
+- Browser opener: `open` only on darwin.
+- GoReleaser ignores darwin/amd64; `install.sh` fails clearly on Intel Macs.
+- `docs/INSTALL-MACOS.md`, README "Checks before a change", requirements, SAD and tickets.
 
-- GoReleaser includes Linux and Darwin.
-- The installer and README mention macOS.
-- TUI terminal handling has Linux and Darwin files using OS-specific `x/sys/unix` constants.
-- The main TUI code no longer directly uses Linux-only `syscall.TCGETS`/`TCSETS`.
+## Tasks (one at a time, in order)
 
-## Important technical findings
+1. **Verify TUI (#2, mechanical).** In Terminal.app run `go build -o meta-cost ./cmd/meta-cost && ./meta-cost tui --once --period all`. Report the output and whether it errors on ioctl. Do not change code unless it fails.
+2. **Push (#6).** Ask the human first, then `git push origin macos-arm64-port` to `kizouker/meta-costcenter`.
+3. **CI matrix (#5).** Add a GitHub Actions workflow on `ubuntu-latest` and `macos-latest` running `go vet ./...`, `gofmt -l .` (fail on output) and `go test ./...`.
+4. **Billing boundary (#3, needs design decision from the human).** Add a `ProcessInspector` interface with the Linux `/proc` implementation and a darwin stub returning `unknown` with an explanation. Do not emulate `/proc`. Tests use a fake inspector.
+5. **Announcements (#6, #7, #8).** Draft only; the human sends them.
 
-- Billing detection in `internal/costcenter/billing.go` reads Linux `/proc/<pid>/{stat,environ,cmdline}`.
-- macOS has no standard `/proc` equivalent that should be assumed by the application.
-- `cmd/meta-cost/main_test.go` contains Linux-specific PTY constants and needs platform-aware tests or build tags.
-- Web tests may fail in a restricted environment because they bind localhost sockets; this is an environment constraint, not necessarily an application failure.
-- The application is a user-space Go program reading Muse JSONL logs, storing normalized data in SQLite, and exposing CLI/TUI/web views.
+## Do not
 
-## Questions for critical review
+- Do not install a `/proc` emulator or add cgo.
+- Do not commit or push without the human's yes. Commits end with the attribution line given by the session.
+- Do not change the design (`design/SAD.md`) without a decision; Structurizr (`design/workspace.dsl`) is the single diagram source.
 
-1. Is the OS boundary in the design at the right abstraction level, or should process inspection and terminal handling be separate interfaces?
-2. Is it acceptable to mark billing detection as unavailable on macOS, or should there be a documented fallback strategy?
-3. Are the Darwin terminal ioctl choices safe for the supported macOS terminals and testable without brittle PTY assumptions?
-4. Should the standalone PlantUML/Structurizr files become the single source of truth, with `SAD.md` linking to them?
-5. Which claims in the README, installer, and GoReleaser configuration still need evidence from macOS arm64?
-6. What is the smallest useful cross-platform test matrix for Linux baseline plus native macOS verification?
+## Open questions
 
-## Review request
-
-Please act as a skeptical architecture reviewer. Identify incorrect assumptions, hidden Linux coupling, unsafe behavior changes, missing tests, and scope that is too large for an incremental contribution. Suggest concrete, low-risk next steps, but do not assume that Linux `/proc` functionality can be emulated on macOS.
-
+- Which billing-mode behavior is acceptable on macOS beyond `unknown`?
+- Is a portable PTY test needed upstream, or is the Linux-only tag enough?
+- ExamPro/Andrew guidance and the Discord channel for the announcement.
