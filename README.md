@@ -23,7 +23,8 @@ subscription, and they cannot include usage that was never logged on this machin
 
 ## Requirements
 
-- Linux or WSL, on amd64 or arm64
+- Linux or WSL, on amd64 or arm64, or macOS on Apple Silicon (arm64 only; see
+  [docs/INSTALL-MACOS.md](docs/INSTALL-MACOS.md) for macOS limitations)
 - A web browser
 
 Go is needed only to build from source, and Node only if you change the frontend code,
@@ -365,12 +366,34 @@ npm run test:browser --prefix frontend
 
 Set `CHROME_PATH` to use a browser other than the installed Google Chrome.
 
+### Checks before a change
+
+```bash
+go vet ./...     # static analysis
+gofmt -l .       # formatting
+go test ./...    # tests
+```
+
+- `go vet ./...` compiles every package, including test files, and reports suspicious code
+  such as wrong format strings or unreachable code. It prints nothing when it finds nothing;
+  a compile error, for example a Linux-only constant on macOS, also makes it fail.
+- `gofmt -l .` lists files that are not formatted the standard Go way. Empty output means
+  every file is formatted; run `gofmt -w <file>` to fix a listed one.
+- `go test ./...` runs the tests. `ok` means a package passed, `FAIL` means a test or the
+  build failed, and `no test files` means the package has no tests. The terminal-dashboard
+  PTY test in `cmd/meta-cost` is built on Linux only, so on macOS that package reports
+  `no test files`.
+
+Add `GOOS=linux` or `GOOS=darwin` (with `GOARCH=arm64` and `CGO_ENABLED=0`) in front of
+`go vet ./...` or `go build` to check that the other platform still compiles; this does not
+run the code there.
+
 ### Releases
 
 Pushing a tag such as `v0.1.0` runs `.github/workflows/release.yml`, which builds the release
 with GoReleaser from `.goreleaser.yaml` and publishes the
-`meta-cost_linux_amd64.tar.gz` and `meta-cost_linux_arm64.tar.gz`
-archives that `install.sh` downloads. Changes to `web/` or `pricing.json` reach users
+`meta-cost_linux_amd64.tar.gz`, `meta-cost_linux_arm64.tar.gz`, and
+`meta-cost_darwin_arm64.tar.gz` archives (macOS is released for Apple Silicon only) that `install.sh` downloads. Changes to `web/` or `pricing.json` reach users
 only through a new binary, since both are embedded in it.
 
 ### Changing the frontend
