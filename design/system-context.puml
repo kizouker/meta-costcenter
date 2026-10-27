@@ -1,0 +1,28 @@
+@startuml Meta Cost Center - System Context
+!pragma layout smetana
+left to right direction
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam defaultFontName Arial
+
+actor "Hackathon participant" as user
+rectangle "Meta Cost Center\nlocal Go application" as costcenter #E8F5E9
+rectangle "Muse Code\nlocal CLI/process" as muse #FFF3E0
+database "Muse session logs\nJSONL files" as logs #FFF3E0
+database "Cost Center database\nSQLite" as db #E3F2FD
+rectangle "Web browser" as browser #F3E5F5
+rectangle "Operating system\nLinux or macOS" as os #ECEFF1
+
+user --> costcenter : runs CLI/TUI\nor opens dashboard
+muse --> logs : writes session records
+costcenter --> logs : reads usage
+costcenter --> db : stores normalized usage
+browser --> costcenter : localhost HTTP
+costcenter --> os : files, terminal,\nprocess APIs
+
+note right of os
+  The application stays in user space.
+  Linux and macOS differences are
+  isolated behind this boundary.
+end note
+@enduml
