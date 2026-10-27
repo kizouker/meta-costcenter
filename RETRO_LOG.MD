@@ -1,5 +1,19 @@
 # Retro log
 
+## 2026-10-27 — evening save
+
+### What went well
+
+- The TUI snapshot ran in Terminal.app without an ioctl error.
+- Missing session logs were identified as unavailable coverage, not zero usage.
+
+### What can be better tomorrow
+
+- Confirm permission before the next handover task: pushing the branch.
+- Keep the backlog aligned with the latest handover and verification.
+
+Rickard's personal retrospective: not yet provided.
+
 ## 2026-10-27
 
 ### What went well
