@@ -6,26 +6,24 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
-	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 // The terminal dashboard: the text report, rescanned on an interval, with keys to refresh, filter,
 // regroup, and scroll. It draws with ANSI escapes in the alternate screen.
 
 func isTerminal(f *os.File) bool {
-	var t syscall.Termios
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&t)))
-	return errno == 0
+	_, err := unix.IoctlGetTermios(int(f.Fd()), terminalGetTermios)
+	return err == nil
 }
 
 func terminalSize(f *os.File) (int, int) {
-	var ws struct{ Row, Col, X, Y uint16 }
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TIOCGWINSZ, uintptr(unsafe.Pointer(&ws)))
-	if errno != 0 || ws.Row == 0 || ws.Col == 0 {
+	ws, err := unix.IoctlGetWinsize(int(f.Fd()), unix.TIOCGWINSZ)
+	if err != nil || ws.Row == 0 || ws.Col == 0 {
 		return 24, 80
 	}
 	return int(ws.Row), int(ws.Col)
@@ -33,18 +31,18 @@ func terminalSize(f *os.File) (int, int) {
 
 // rawMode puts the terminal in cbreak mode without echo and returns a function that restores it.
 func rawMode(f *os.File) (func(), error) {
-	var old syscall.Termios
-	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&old))); errno != 0 {
-		return nil, errno
+	old, err := unix.IoctlGetTermios(int(f.Fd()), terminalGetTermios)
+	if err != nil {
+		return nil, err
 	}
 	raw := old
-	raw.Lflag &^= syscall.ECHO | syscall.ICANON | syscall.IEXTEN
-	raw.Iflag &^= syscall.ICRNL | syscall.IXON
-	raw.Cc[syscall.VMIN], raw.Cc[syscall.VTIME] = 1, 0
-	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TCSETS, uintptr(unsafe.Pointer(&raw))); errno != 0 {
-		return nil, errno
+	raw.Lflag &^= unix.ECHO | unix.ICANON | unix.IEXTEN
+	raw.Iflag &^= unix.ICRNL | unix.IXON
+	raw.Cc[unix.VMIN], raw.Cc[unix.VTIME] = 1, 0
+	if err := unix.IoctlSetTermios(int(f.Fd()), terminalSetTermios, raw); err != nil {
+		return nil, err
 	}
-	return func() { syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TCSETS, uintptr(unsafe.Pointer(&old))) }, nil
+	return func() { _ = unix.IoctlSetTermios(int(f.Fd()), terminalSetTermios, old) }, nil
 }
 
 // Keys the dashboard understands, decoded from terminal input.
