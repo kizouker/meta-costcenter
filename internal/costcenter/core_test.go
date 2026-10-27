@@ -478,7 +478,7 @@ func TestSubagentsInheritRootProject(t *testing.T) {
 	if len(sessions) != 3 || !sessions["parent"] || !sessions["child"] || !sessions["grand"] {
 		t.Fatalf("sessions %v", sessions)
 	}
-	detail, err := f.store.ProjectDetail("site", Filters{Period: "all"}, f.rates)
+	detail, err := f.store.ProjectDetail("site", Filters{Period: "all"}, f.rates, "")
 	if err != nil || detail.Totals.Input != 180 {
 		t.Fatalf("%+v %v", detail, err)
 	}
@@ -502,14 +502,14 @@ func TestProjectDetailMatchesBreakdown(t *testing.T) {
 	if unassigned.Sessions != 3 {
 		t.Fatalf("unassigned %+v", unassigned)
 	}
-	detail, err := f.store.ProjectDetail("unassigned", Filters{Period: "all", Model: "ignored"}, f.rates)
+	detail, err := f.store.ProjectDetail("unassigned", Filters{Period: "all", Model: "ignored"}, f.rates, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if detail.Totals.Input != unassigned.Input || len(detail.Sessions) != 3 {
 		t.Fatalf("detail %+v", detail)
 	}
-	if _, err := f.store.ProjectDetail("missing", Filters{Period: "all"}, f.rates); !isNotFound(err) {
+	if _, err := f.store.ProjectDetail("missing", Filters{Period: "all"}, f.rates, ""); !isNotFound(err) {
 		t.Fatalf("missing project: %v", err)
 	}
 }

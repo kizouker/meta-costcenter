@@ -23,7 +23,19 @@ func validateRate(value any) ([]string, error) {
 		}
 		result[i] = d.Text
 	}
-	return result, nil
+	// A price per image is optional, for image models.
+	perImage := "0"
+	if value, ok := body["per_image"]; ok && value != nil && pyStr(value) != "" {
+		d, err := ParseDecimal(pyStr(value))
+		if err != nil {
+			return nil, invalid("Rates must be numbers")
+		}
+		if !d.Finite || d.Value.Sign() < 0 {
+			return nil, invalid("Rates must be finite and nonnegative")
+		}
+		perImage = d.Text
+	}
+	return append(result, perImage), nil
 }
 
 func (s *Store) SetLocalRate(model string, body any) error {
@@ -34,7 +46,8 @@ func (s *Store) SetLocalRate(model string, body any) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.DB.Exec("INSERT OR REPLACE INTO rates VALUES (?, ?, ?, ?, ?)", model, rate[0], rate[1], rate[2], nowISO())
+	_, err = s.DB.Exec("INSERT OR REPLACE INTO rates (model, input_per_million, cached_input_per_million, output_per_million, updated_at, per_image) "+
+		"VALUES (?, ?, ?, ?, ?, ?)", model, rate[0], rate[1], rate[2], nowISO(), rate[3])
 	return err
 }
 

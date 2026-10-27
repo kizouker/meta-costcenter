@@ -82,9 +82,26 @@ The sidebar links to six pages:
 | **Pricing** | Per-token rates, including any rates you have entered for models without public pricing. |
 | **Alerts** | Spending limits and their warning levels. |
 
-Clicking a session opens a detail page showing the session's totals, a timeline, the
-tree of subagents and how much each one used, a per-model split, and every recorded
-model completion. Clicking a project opens a page listing that project's sessions and
+The chart on the Overview and on each project's page can show usage in 15-minute blocks, by
+hour, or by day. It starts at the finest resolution that suits the period, which is 15-minute
+blocks for a single day and hours for up to a week, and it remembers the resolution you choose
+for as long as the period allows it: 15-minute blocks cover at most two days and hours at most
+fourteen. Every block in the period appears on the axis, including empty ones and those still
+to come today, and a dashed line marks the current block, so that today's usage can be watched
+as it arrives.
+
+Clicking a session opens a detail page showing the session's totals, its turns, a
+timeline, the tree of subagents and how much each one used, and a per-model split. A turn
+is one prompt and every model completion it led to, so the **Turns** table shows what each
+prompt cost, which model answered it, and the reasoning effort it was sent with.
+Expanding a turn lists its completions in order, the subagents' among them, with the time
+since the prompt was sent. A turn's
+cost includes the subagents it started, each counted in the turn that was running when
+the subagent made its first completion. The prompt is shown cut to its first 280
+characters and is read from the Muse log when the page asks for it, so it disappears from
+the page once Muse's log has been deleted. Usage imported before turns were tracked is
+assigned to its turns the first time the new version scans, which rereads every log once
+(about 15 seconds for 3 GB of logs). Clicking a project opens a page listing that project's sessions and
 models. These detail pages have their own URLs, so you can bookmark them.
 
 The **Filters** drawer narrows the data by date range, project, model, session, and
@@ -159,14 +176,24 @@ of the session that started them. The tool never guesses a project from the cont
 your prompts.
 
 The billing mode records whether a session was paid through a subscription or
-pay-as-you-go (`payg`). Muse does not log which credential a session used, so Cost
-Center records it with a Muse `SessionStart` hook, which you install once:
+pay-as-you-go (`payg`). Muse does not log which credential a session used, nor the
+reasoning effort of each turn, so Cost Center records both with Muse hooks, which you
+install once:
 
 ```bash
-meta-cost hook install      # adds the hook to ~/.config/muse/settings.json
-meta-cost hook status       # shows whether it is installed and when it last recorded a session
-meta-cost hook uninstall    # removes only the entry that install added
+meta-cost hook install      # adds the hooks to ~/.config/muse/settings.json
+meta-cost hook status       # shows whether they are installed and when they last recorded a session
+meta-cost hook uninstall    # removes only the entries that install added
 ```
+
+If you installed the hook with an earlier version, run `meta-cost hook install` again to
+add the `UserPromptSubmit` hook that records effort; `hook status` and `doctor` say when it
+is missing. That hook runs before each prompt is sent and records the effort Muse was set
+to: a `--reasoning-effort` (or `--effort`) flag if Muse was started with one, otherwise the
+model's entry in `model_reasoning_efforts` in Muse's settings, which `/effort` changes,
+otherwise `reasoning_effort`, and otherwise Muse's default of `high`. Muse does not log the
+effort it sends, so this is the configured effort rather than one read back from Muse,
+and turns from before the hook was installed show none.
 
 When a session starts, the hook looks at how Muse was started and records the session
 as pay-as-you-go if a `META_API_KEY` environment variable, `--api-key-stdin`, or an API
@@ -202,7 +229,7 @@ effect on the next scan, including for sessions that were imported earlier.
 
 Costs are estimated from a bundled snapshot of
 [Meta's published pricing](https://dev.meta.ai/docs/pricing-rate-limits), dated
-2026-10-24 and stored in
+2026-10-24 (2026-10-27 for `muse-image-1.0`) and stored in
 [pricing.json](pricing.json), which is built into the binary. That file contains only
 publicly documented models.
 
@@ -223,8 +250,36 @@ all dates.
 If you have audited historical rates, you can supply them with `--prices path.json`.
 The file uses the same format as the bundled `pricing.json`, where each entry gives the
 model ID, the three per-million-token rates in USD, the date the rate took effect, a
-source URL, the retrieval date, and a snapshot version. When more than one rate applies,
-the one with the most recent effective date is used.
+source URL, the retrieval date, and a snapshot version. Image models also have a
+`per_image` price, which applies to each image a call returned; `muse-image-1.0` costs
+$0.01 per image, and the token counts its responses report are not billed, so its token
+rates are zero. When more than one rate applies, the one with the most recent effective
+date is used.
+
+## Usage from scripts
+
+Cost Center only sees what Muse logs, so a script that calls the Meta API directly is
+invisible to it unless the script reports each call with `meta-cost record`:
+
+```bash
+meta-cost record --tool gen-image --model muse-image-1.0 --images 2 \
+  --input-tokens 120 --output-tokens 8000 --key jolly-challenge --id gen-image-0b7f…
+```
+
+The call is stored like Muse usage, so it appears on its project's page, counts toward
+alerts, and is priced from the same rates. It belongs to the project named by
+`--project`, or otherwise to the git repository (or folder) the command runs in, which is
+how Muse names a workspace. Calls are grouped into one session per tool and day, such as
+`gen-image-2026-10-27`, unless `--session` names another, and each call is a turn on that
+session's page. Recorded usage is pay-as-you-go unless `--billing-mode` says otherwise,
+since a script uses an API key, and `--key` (or `$META_KEYGUARD_KEY`) names the Keyguard
+key so that alerts matching that key count it. The script's prompt is not recorded.
+Recording the same `--id` twice records the call once, so a script can retry safely. The
+command prints the recording and its estimated cost as JSON.
+
+[docs/INTEGRATING-SCRIPTS.md](docs/INTEGRATING-SCRIPTS.md) describes the command in full,
+with a helper to copy into a script and a checklist, and is written so that it can be
+handed to a coding agent that is adding reporting to a new script.
 
 ## Spending alerts
 
@@ -312,11 +367,14 @@ These paths follow `$XDG_DATA_HOME` and `$XDG_CONFIG_HOME` when they are set.
 
 ## Privacy
 
-The tool only reads Muse's logs and never modifies them, and it does not read any
-authentication files. From each record it keeps token counts, model names, timestamps,
-and the identifiers needed to trace where the record came from. Your prompts, the
-model's responses, and tool output are never saved, although they pass through memory
-briefly while each log line is parsed.
+The tool only reads Muse's logs and never modifies them. From each record it keeps token
+counts, model names, timestamps, and the identifiers needed to trace where the record came
+from, including where each prompt is in its log. Your prompts, the model's responses, and
+tool output are never saved. The session page shows the first 280 characters of each
+prompt, which it reads from the Muse log on request and holds only in the dashboard's
+memory. The Muse hooks read Muse's settings for the reasoning effort, and its `auth.json`
+only to tell whether a key or an account login is in use; neither keys nor prompts are
+stored.
 
 The data directory is created readable only by you (`0700`), and so is the database
 (`0600`). The output of `doctor` includes local file paths to help with troubleshooting,
@@ -325,8 +383,8 @@ whereas exports leave them out so that they are safe to share.
 ## Limitations
 
 - **Only local, retained logs are counted.** Usage from other machines, direct API
-  calls, sessions with logging turned off, and logs that have been deleted cannot be
-  seen. An empty report therefore does not prove that nothing was used.
+  calls that are not reported with `meta-cost record`, sessions with logging turned off,
+  and logs that have been deleted cannot be seen. An empty report therefore does not prove that nothing was used.
 - **Parsing was built against Muse 1.4.12.** The tool reads `model_completed` events
   from session, subagent, observer, and approval-review logs. A later Muse version that
   changes its log format may need an update. Models it does not recognise are still

@@ -114,9 +114,23 @@ var commands = []command{
 		{name: "--json", dest: "json", help: "Print alert status as JSON (status always prints JSON)"}},
 		help: "Add a monthly alert, or print every alert's status as JSON"},
 	{name: "hook", positionals: []string{"action"},
-		choices: map[string][]string{"action": {"install", "uninstall", "status", "session-start"}}, options: []option{
+		choices: map[string][]string{"action": {"install", "uninstall", "status", "session-start", "prompt-submit"}}, options: []option{
 			{name: "--muse-settings", dest: "muse_settings", value: "PATH", help: "Muse settings file (default ~/.config/muse/settings.json)"}},
-		help: "Install the Muse hook that records each session's billing mode"},
+		help: "Install the Muse hooks that record each session's billing mode and each turn's effort"},
+	{name: "record", options: []option{
+		{name: "--model", dest: "model", value: "ID", help: "Model the call used (required)"},
+		{name: "--images", dest: "images", value: "N", help: "Images the call returned, for image models"},
+		{name: "--input-tokens", dest: "input_tokens", value: "N"},
+		{name: "--output-tokens", dest: "output_tokens", value: "N"},
+		{name: "--cached-tokens", dest: "cached_tokens", value: "N"},
+		{name: "--project", dest: "project", value: "NAME", help: "Project (default: the git repository or folder you run it in)"},
+		{name: "--tool", dest: "tool", value: "NAME", help: "What made the call, such as gen-image (default: script)"},
+		{name: "--session", dest: "session", value: "ID", help: "Session to group it under (default: TOOL-YYYY-MM-DD)"},
+		{name: "--key", dest: "key", value: "LABEL", help: "Meta Keyguard key label (default: $META_KEYGUARD_KEY)"},
+		{name: "--billing-mode", dest: "billing_mode", value: "MODE", choices: []string{"payg", "subscription", "unknown"}, help: "Default payg"},
+		{name: "--id", dest: "id", value: "ID", help: "Unique ID; recording the same ID twice records it once"},
+		{name: "--at", dest: "at", value: "TIME", help: "When the call was made, ISO 8601 (default: now)"}},
+		help: "Record usage from a script that calls the Meta API directly"},
 	{name: "billing", positionals: []string{"action"}, choices: map[string][]string{"action": {"backfill"}}, options: []option{
 		{name: "--mode", dest: "mode", value: "MODE", choices: []string{"payg", "subscription"}, help: "Billing mode to record"},
 		{name: "--before", dest: "before", value: "DATE", help: "Only sessions that started before this local date"},
@@ -307,9 +321,9 @@ func Main(argv []string, assets Assets) int {
 		if errors.Is(err, errInterrupted) {
 			return 0
 		}
-		// Muse runs the SessionStart hook; a failure there must never disturb the session.
-		if a.command == "hook" && a.positionals["action"] == "session-start" {
-			fmt.Fprintf(os.Stderr, "meta-cost hook: billing mode not recorded: %v\n", err)
+		// Muse runs the hooks; a failure there must never disturb the session.
+		if a.command == "hook" && (a.positionals["action"] == "session-start" || a.positionals["action"] == "prompt-submit") {
+			fmt.Fprintf(os.Stderr, "meta-cost hook: %v\n", err)
 			return 0
 		}
 		fmt.Fprintf(os.Stderr, "meta-cost: %v\n", err)
@@ -403,7 +417,7 @@ func run(a args, assets Assets, out io.Writer, interrupted <-chan struct{}) erro
 	}
 	filters := Filters{Period: period, Project: a.get("project"), Model: a.get("model"), Session: session,
 		BillingMode: a.get("billing_mode"), Sort: a.get("sort")}
-	if cmd != "reconcile" && cmd != "alert" && cmd != "hook" && cmd != "billing" {
+	if cmd != "reconcile" && cmd != "alert" && cmd != "hook" && cmd != "billing" && cmd != "record" {
 		filters.From, filters.To = a.get("from"), a.get("to")
 		if _, _, err := bounds(filters); err != nil {
 			return err
@@ -424,6 +438,10 @@ func run(a args, assets Assets, out io.Writer, interrupted <-chan struct{}) erro
 		HookSessionStart(os.Stdin, dbPath, os.Stderr)
 		return nil
 	}
+	if cmd == "hook" && a.positionals["action"] == "prompt-submit" {
+		HookPromptSubmit(os.Stdin, dbPath, os.Stderr)
+		return nil
+	}
 	store, err := OpenStore(dbPath)
 	if err != nil {
 		return err
@@ -441,6 +459,8 @@ func run(a args, assets Assets, out io.Writer, interrupted <-chan struct{}) erro
 		return hook(store, a, settingsPath, configPath, config, out)
 	case "billing":
 		return backfill(store, a, roots, config, out)
+	case "record":
+		return record(store, a, rates, out)
 	case "show":
 		port := 8765
 		if a.has("port") {
@@ -719,19 +739,24 @@ func alert(store *Store, a args, roots []string, config Config, rates []Rate, ou
 func hook(store *Store, a args, settingsPath, configPath string, config Config, out io.Writer) error {
 	switch a.positionals["action"] {
 	case "install":
-		command, err := hookCommandLine(store.Path, configPath)
-		if err != nil {
-			return err
+		commands := map[string]string{}
+		for _, h := range museHooks {
+			command, err := hookCommandLine(h.args, store.Path, configPath)
+			if err != nil {
+				return err
+			}
+			commands[h.event] = command
 		}
-		changed, err := InstallHook(settingsPath, command)
+		changed, err := InstallHook(settingsPath, commands)
 		if err != nil {
 			return err
 		}
 		if changed {
-			fmt.Fprintf(out, "Installed the billing mode hook in %s (a copy of the previous file is in %s.meta-cost.bak).\n"+
-				"Sessions started from now on record whether they use the subscription or an API key.\n", settingsPath, settingsPath)
+			fmt.Fprintf(out, "Installed the Muse hooks in %s (a copy of the previous file is in %s.meta-cost.bak).\n"+
+				"Sessions started from now on record whether they use the subscription or an API key,\n"+
+				"and each prompt records the reasoning effort it was sent with.\n", settingsPath, settingsPath)
 		} else {
-			fmt.Fprintf(out, "The billing mode hook is already installed in %s.\n", settingsPath)
+			fmt.Fprintf(out, "The Muse hooks are already installed in %s.\n", settingsPath)
 		}
 	case "uninstall":
 		changed, err := UninstallHook(settingsPath)
@@ -739,9 +764,9 @@ func hook(store *Store, a args, settingsPath, configPath string, config Config, 
 			return err
 		}
 		if changed {
-			fmt.Fprintf(out, "Removed the billing mode hook from %s. New sessions will be recorded as unknown.\n", settingsPath)
+			fmt.Fprintf(out, "Removed the Muse hooks from %s. New sessions will be recorded as unknown.\n", settingsPath)
 		} else {
-			fmt.Fprintf(out, "The billing mode hook is not installed in %s.\n", settingsPath)
+			fmt.Fprintf(out, "The Muse hooks are not installed in %s.\n", settingsPath)
 		}
 	case "status":
 		diagnostics, err := store.BillingDiagnostics(settingsPath, config.Sessions)
@@ -750,6 +775,32 @@ func hook(store *Store, a args, settingsPath, configPath string, config Config, 
 		}
 		printJSON(out, diagnostics)
 	}
+	return nil
+}
+
+func record(store *Store, a args, rates []Rate, out io.Writer) error {
+	if !a.has("model") {
+		return fmt.Errorf("--model is required")
+	}
+	r, err := newRecording(a)
+	if err != nil {
+		return err
+	}
+	added, err := store.Record(r)
+	if err != nil {
+		return err
+	}
+	cached := r.Cached
+	var estimated *string
+	if value, _, _, ok := estimate(Row{Model: r.Model, RecordedAt: r.RecordedAt, Input: r.Input, Output: r.Output, Cached: &cached, Images: r.Images}, rates); ok {
+		text := value.String()
+		estimated = &text
+	}
+	printJSON(out, struct {
+		Recorded bool `json:"recorded"`
+		Recording
+		EstimatedUSD *string `json:"estimated_api_equivalent_usd"`
+	}{added, r, estimated})
 	return nil
 }
 

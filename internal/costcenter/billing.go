@@ -363,14 +363,18 @@ func (s *Store) SessionDetections(session string) ([]DetectionRow, error) {
 // Muse settings. The hook goes in the user settings file, which applies to every workspace,
 // because Muse ignores project hooks in untrusted workspaces.
 
-const hookArgs = "hook session-start"
+// museHooks are the Muse hook events this tool installs and the subcommand each one runs.
+var museHooks = []struct{ event, args string }{
+	{"SessionStart", "hook session-start"},
+	{"UserPromptSubmit", "hook prompt-submit"},
+}
 
 func museSettingsPath() string { return filepath.Join(museConfigDir(), "settings.json") }
 
 // hookCommandLine is the command the hook runs: this binary by absolute path, so that the hook
 // works when the binary's directory is not on Muse's PATH, with the database and config named
 // explicitly, because Muse runs hooks without XDG_DATA_HOME or XDG_CONFIG_HOME.
-func hookCommandLine(dbPath, configPath string) (string, error) {
+func hookCommandLine(args, dbPath, configPath string) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
@@ -380,7 +384,7 @@ func hookCommandLine(dbPath, configPath string) (string, error) {
 			return "", err
 		}
 	}
-	return shellWord(exe) + " " + hookArgs + " --db " + shellWord(dbPath) + " --config " + shellWord(configPath), nil
+	return shellWord(exe) + " " + args + " --db " + shellWord(dbPath) + " --config " + shellWord(configPath), nil
 }
 
 func shellWord(s string) string {
@@ -392,9 +396,18 @@ func shellWord(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// isOurHook recognises an entry this tool installed, including one pointing at an older binary path.
-func isOurHook(command string) bool {
-	return strings.Contains(command, " "+hookArgs) && strings.Contains(command, "meta-cost")
+// isOurHook recognises an entry this tool installed for one hook subcommand, including one pointing
+// at an older binary path. With args empty it recognises any of them.
+func isOurHook(command, args string) bool {
+	if !strings.Contains(command, "meta-cost") {
+		return false
+	}
+	for _, h := range museHooks {
+		if (args == "" || args == h.args) && strings.Contains(command, " "+h.args) {
+			return true
+		}
+	}
+	return false
 }
 
 func readSettings(path string) (map[string]any, error) {
@@ -414,8 +427,8 @@ func readSettings(path string) (map[string]any, error) {
 	return settings, nil
 }
 
-// sessionStartGroups is settings.hooks.SessionStart, or an error if the file uses another shape.
-func sessionStartGroups(settings map[string]any) ([]any, error) {
+// hookGroups is settings.hooks[event], or an error if the file uses another shape.
+func hookGroups(settings map[string]any, event string) ([]any, error) {
 	hooks, ok := settings["hooks"]
 	if !ok || hooks == nil {
 		return nil, nil
@@ -424,18 +437,18 @@ func sessionStartGroups(settings map[string]any) ([]any, error) {
 	if !ok {
 		return nil, errors.New("Muse settings have a hooks value that is not an object")
 	}
-	groups, ok := table["SessionStart"]
+	groups, ok := table[event]
 	if !ok || groups == nil {
 		return nil, nil
 	}
 	list, ok := groups.([]any)
 	if !ok {
-		return nil, errors.New("Muse settings have a hooks.SessionStart value that is not a list")
+		return nil, fmt.Errorf("Muse settings have a hooks.%s value that is not a list", event)
 	}
 	return list, nil
 }
 
-// eachHook calls fn for every command hook in the SessionStart groups.
+// eachHook calls fn for every command hook in one event's groups.
 func eachHook(groups []any, fn func(entry map[string]any, command string)) {
 	for _, group := range groups {
 		g, _ := group.(map[string]any)
@@ -492,35 +505,43 @@ func writeSettings(path string, settings map[string]any) error {
 	return os.Rename(temp.Name(), path)
 }
 
-// InstallHook adds the SessionStart hook to Muse's settings, or points an existing one at command.
-// It keeps every other setting and hook, and reports whether the file changed.
-func InstallHook(path, command string) (bool, error) {
+// InstallHook adds this tool's hooks to Muse's settings, commands giving the command for each event,
+// or points existing ones at those commands. It keeps every other setting and hook, and reports
+// whether the file changed.
+func InstallHook(path string, commands map[string]string) (bool, error) {
 	settings, err := readSettings(path)
 	if err != nil {
 		return false, err
 	}
-	groups, err := sessionStartGroups(settings)
-	if err != nil {
-		return false, err
-	}
-	found, changed := false, false
-	eachHook(groups, func(entry map[string]any, existing string) {
-		if isOurHook(existing) {
-			found = true
-			if existing != command {
-				entry["command"], changed = command, true
+	changed := false
+	for _, h := range museHooks {
+		command, ok := commands[h.event]
+		if !ok {
+			continue
+		}
+		groups, err := hookGroups(settings, h.event)
+		if err != nil {
+			return false, err
+		}
+		found := false
+		eachHook(groups, func(entry map[string]any, existing string) {
+			if isOurHook(existing, h.args) {
+				found = true
+				if existing != command {
+					entry["command"], changed = command, true
+				}
 			}
+		})
+		if !found {
+			groups = append(groups, map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command}}})
+			table, _ := settings["hooks"].(map[string]any)
+			if table == nil {
+				table = map[string]any{}
+				settings["hooks"] = table
+			}
+			table[h.event] = groups
+			changed = true
 		}
-	})
-	if !found {
-		groups = append(groups, map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command}}})
-		table, _ := settings["hooks"].(map[string]any)
-		if table == nil {
-			table = map[string]any{}
-			settings["hooks"] = table
-		}
-		table["SessionStart"] = groups
-		changed = true
 	}
 	if !changed {
 		return false, nil
@@ -534,61 +555,70 @@ func UninstallHook(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	groups, err := sessionStartGroups(settings)
-	if err != nil {
-		return false, err
-	}
 	changed := false
-	var kept []any
-	for _, group := range groups {
-		g, ok := group.(map[string]any)
-		entries, isList := g["hooks"].([]any)
-		if !ok || !isList {
-			kept = append(kept, group)
+	for _, h := range museHooks {
+		groups, err := hookGroups(settings, h.event)
+		if err != nil {
+			return false, err
+		}
+		removed := false
+		var kept []any
+		for _, group := range groups {
+			g, ok := group.(map[string]any)
+			entries, isList := g["hooks"].([]any)
+			if !ok || !isList {
+				kept = append(kept, group)
+				continue
+			}
+			var remaining []any
+			for _, entry := range entries {
+				if e, _ := entry.(map[string]any); e != nil {
+					if command, _ := e["command"].(string); isOurHook(command, h.args) {
+						removed = true
+						continue
+					}
+				}
+				remaining = append(remaining, entry)
+			}
+			// A group that held only this tool's hooks goes too; an unrelated empty group stays.
+			if len(remaining) > 0 {
+				g["hooks"] = remaining
+				kept = append(kept, g)
+			} else if len(entries) == 0 {
+				kept = append(kept, g)
+			}
+		}
+		if !removed {
 			continue
 		}
-		var remaining []any
-		for _, entry := range entries {
-			if e, _ := entry.(map[string]any); e != nil {
-				if command, _ := e["command"].(string); isOurHook(command) {
-					changed = true
-					continue
-				}
-			}
-			remaining = append(remaining, entry)
+		changed = true
+		table := settings["hooks"].(map[string]any)
+		if len(kept) > 0 {
+			table[h.event] = kept
+		} else {
+			delete(table, h.event)
 		}
-		// A group that held only this tool's hooks goes too; an unrelated empty group stays.
-		if len(remaining) > 0 {
-			g["hooks"] = remaining
-			kept = append(kept, g)
-		} else if len(entries) == 0 {
-			kept = append(kept, g)
+		if len(table) == 0 {
+			delete(settings, "hooks")
 		}
 	}
 	if !changed {
 		return false, nil
-	}
-	table := settings["hooks"].(map[string]any)
-	if len(kept) > 0 {
-		table["SessionStart"] = kept
-	} else {
-		delete(table, "SessionStart")
-	}
-	if len(table) == 0 {
-		delete(settings, "hooks")
 	}
 	return true, writeSettings(path, settings)
 }
 
 // BillingDiagnostics is what `doctor` and `hook status` report about billing mode detection.
 type BillingDiagnostics struct {
-	MuseSettings       string  `json:"muse_settings"`
-	HookInstalled      bool    `json:"hook_installed"`
-	HookCommand        *string `json:"hook_command"`
-	LastDetectedAt     *string `json:"last_detected_at"`
-	Detections         int     `json:"detections"`
-	UndetectedSessions int     `json:"undetected_sessions_7d"`
-	Warning            *string `json:"warning"`
+	MuseSettings  string  `json:"muse_settings"`
+	HookInstalled bool    `json:"hook_installed"`
+	HookCommand   *string `json:"hook_command"`
+	// PromptHookInstalled is the UserPromptSubmit hook, which records the effort of each turn.
+	PromptHookInstalled bool    `json:"prompt_hook_installed"`
+	LastDetectedAt      *string `json:"last_detected_at"`
+	Detections          int     `json:"detections"`
+	UndetectedSessions  int     `json:"undetected_sessions_7d"`
+	Warning             *string `json:"warning"`
 }
 
 // BillingDiagnostics reports whether the hook is installed and whether it appears to be running. A
@@ -599,15 +629,24 @@ func (s *Store) BillingDiagnostics(settingsPath string, sessions map[string]Sess
 	var warning string
 	if settings, err := readSettings(settingsPath); err != nil {
 		warning = err.Error()
-	} else if groups, err := sessionStartGroups(settings); err != nil {
-		warning = err.Error()
 	} else {
-		eachHook(groups, func(_ map[string]any, command string) {
-			if isOurHook(command) {
-				c := command
-				d.HookInstalled, d.HookCommand = true, &c
+		for _, h := range museHooks {
+			groups, err := hookGroups(settings, h.event)
+			if err != nil {
+				warning = err.Error()
+				break
 			}
-		})
+			eachHook(groups, func(_ map[string]any, command string) {
+				switch {
+				case !isOurHook(command, h.args):
+				case h.event == "SessionStart":
+					c := command
+					d.HookInstalled, d.HookCommand = true, &c
+				default:
+					d.PromptHookInstalled = true
+				}
+			})
+		}
 	}
 	var last, first sql.NullString
 	if err := s.DB.QueryRow("SELECT MAX(detected_at), MIN(CASE WHEN source != 'backfill' THEN detected_at END), "+
@@ -640,6 +679,8 @@ func (s *Store) BillingDiagnostics(settingsPath string, sessions map[string]Sess
 	case d.UndetectedSessions > 0:
 		warning = fmt.Sprintf("%d session(s) in the last 7 days have no billing mode detection; "+
 			"the Muse hook may have stopped running.", d.UndetectedSessions)
+	case !d.PromptHookInstalled:
+		warning = "The effort of each turn is not recorded. Run `meta-cost hook install` again to add the prompt hook."
 	}
 	if warning != "" {
 		d.Warning = &warning

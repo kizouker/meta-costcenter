@@ -5,10 +5,13 @@ import { COST_NOTE, cost, number, tokens } from '../format.js';
 
 const FIELDS = [['input_per_million', 'Input'], ['cached_input_per_million', 'Cached input'], ['output_per_million', 'Output']];
 const SOURCE = { missing: 'No rate', local: 'Local rate', public: 'Public rate' };
-const rateText = rate => rate ? FIELDS.map(([key]) => '$' + Number(rate[key]).toLocaleString(undefined, { maximumFractionDigits: 4 })).join(' / ') : '—';
+const money = value => '$' + Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 });
+// Image models are priced per image; their token rates are zero.
+const rateText = rate => !rate ? '—' : Number(rate.per_image) > 0 && FIELDS.every(([key]) => !Number(rate[key])) ? `${money(rate.per_image)} per image`
+  : FIELDS.map(([key]) => money(rate[key])).join(' / ') + (Number(rate.per_image) > 0 ? ` + ${money(rate.per_image)} per image` : '');
 
 function RateForm({ model, initial, onDone }) {
-  const [values, setValues] = useState(() => Object.fromEntries(FIELDS.map(([key]) => [key, initial?.[key] ?? ''])));
+  const [values, setValues] = useState(() => ({ ...Object.fromEntries(FIELDS.map(([key]) => [key, initial?.[key] ?? ''])), per_image: initial?.per_image ?? '0' }));
   const [error, setError] = useState('');
   async function save(event) {
     event.preventDefault();
@@ -18,6 +21,8 @@ function RateForm({ model, initial, onDone }) {
   return <form className="rate-form" onSubmit={save} aria-label={`Rate for ${model}`}>
     {FIELDS.map(([key, label]) => <label key={key}>{label} <span className="unit">USD / 1M tokens</span>
       <input name={key} type="number" min="0" step="any" required value={values[key]} onChange={event => setValues(previous => ({ ...previous, [key]: event.target.value }))} /></label>)}
+    <label>Per image <span className="unit">USD, for image models</span>
+      <input name="per_image" type="number" min="0" step="any" value={values.per_image} onChange={event => setValues(previous => ({ ...previous, per_image: event.target.value }))} /></label>
     <div className="form-actions"><button type="submit" className="primary">Save local rate</button><button type="button" onClick={onDone}>Cancel</button></div>
     {error && <p className="form-error" role="alert">{error}</p>}
   </form>;

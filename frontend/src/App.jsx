@@ -81,7 +81,10 @@ function Dashboard({ config }) {
     return validateFilters({ ...config.filters, ...saved?.filters, ...legacy });
   });
   const [grouping, setGrouping] = useState(() => GROUPS[saved?.grouping] ? saved.grouping : 'project');
-  const { data, loading, error } = useResource('/api/dashboard?' + filterQuery(filters));
+  // The chart resolution chosen last, kept across launches; '' lets the date range decide.
+  const [resolution, setResolution] = useState(() => { try { return localStorage.getItem('muse-cost.resolution') || ''; } catch { return ''; } });
+  function chooseResolution(value) { setResolution(value); try { localStorage.setItem('muse-cost.resolution', value); } catch { /* Storage may be disabled. */ } }
+  const { data, loading, error } = useResource('/api/dashboard?' + filterQuery({ ...filters, resolution }));
   const [options, setOptions] = useState({});
   const [exportError, setExportError] = useState('');
   const [exporting, setExporting] = useState(false);
@@ -138,12 +141,12 @@ function Dashboard({ config }) {
       {(error || exportError || status?.error) && <div id="error" className="notice danger" role="alert">{error || exportError || status.error}{data && ' Showing the last imported usage; it may be stale.'}</div>}
       {Boolean(status?.warnings.length) && <div id="warnings" className="notice">{status.warnings.map(warning => <p key={warning}>{warning}</p>)}</div>}
       <Routes>
-        <Route path="/" element={data ? <Overview data={data} /> : <div className="loading-state" role="status">Loading usage…</div>} />
+        <Route path="/" element={data ? <Overview data={data} setResolution={chooseResolution} /> : <div className="loading-state" role="status">Loading usage…</div>} />
         <Route path="/breakdown" element={data ? <Breakdown data={data} grouping={grouping} setGrouping={setGrouping} selectFilter={selectFilter} /> : <div className="loading-state" role="status">Loading usage…</div>} />
         <Route path="/sessions" element={<Sessions {...pageProps} />} />
         <Route path="/sessions/:id" element={<SessionDetail {...pageProps} />} />
         <Route path="/projects" element={<Projects {...pageProps} />} />
-        <Route path="/projects/:name" element={<ProjectDetail {...pageProps} alerts={data?.alerts} />} />
+        <Route path="/projects/:name" element={<ProjectDetail {...pageProps} alerts={data?.alerts} resolution={resolution} setResolution={chooseResolution} />} />
         <Route path="/pricing" element={<Pricing />} />
         <Route path="/alerts" element={<Alerts options={options} onPreview={setPreview} />} />
         <Route path="/activity" element={<Navigate to="/sessions" replace />} />

@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// Rate is a model's price per million tokens. Public rates come from pricing.json; local rates
-// are entered on this machine and override them.
+// Rate is a model's price per million tokens, and per generated image for image models. Public
+// rates come from pricing.json; local rates are entered on this machine and override them.
 type Rate struct {
 	Model           string
 	EffectiveFrom   string
@@ -20,6 +20,7 @@ type Rate struct {
 	Input           Dec
 	CachedInput     Dec
 	Output          Dec
+	PerImage        Dec
 }
 
 // RateValues is a rate's three prices, as the dashboard shows them.
@@ -27,9 +28,10 @@ type RateValues struct {
 	Input       Dec `json:"input_per_million"`
 	CachedInput Dec `json:"cached_input_per_million"`
 	Output      Dec `json:"output_per_million"`
+	PerImage    Dec `json:"per_image"`
 }
 
-func (r Rate) Values() RateValues { return RateValues{r.Input, r.CachedInput, r.Output} }
+func (r Rate) Values() RateValues { return RateValues{r.Input, r.CachedInput, r.Output, r.PerImage} }
 
 var rateFields = []string{"input_per_million", "cached_input_per_million", "output_per_million"}
 
@@ -71,16 +73,25 @@ func LoadPrices(data []byte) ([]Rate, error) {
 			}
 			values[i] = d.Value
 		}
+		// Image models also have a price per image; token-only models leave it out.
+		var perImage Dec
+		if value, ok := r["per_image"]; ok {
+			d, err := ParseDecimal(pyStr(value))
+			if err != nil || !d.Finite || d.Value.Sign() < 0 {
+				return nil, fmt.Errorf("Rates must be finite and nonnegative")
+			}
+			perImage = d.Value
+		}
 		source, _ := r["source_url"].(string)
 		rates = append(rates, Rate{Model: pyStr(r["model"]), EffectiveFrom: effective, SnapshotVersion: pyStr(r["snapshot_version"]),
-			SourceURL: source, Local: truthy(r["local"]), Input: values[0], CachedInput: values[1], Output: values[2]})
+			SourceURL: source, Local: truthy(r["local"]), Input: values[0], CachedInput: values[1], Output: values[2], PerImage: perImage})
 	}
 	return rates, nil
 }
 
 // WithLocalRates is the public rates plus the rates entered on this machine.
 func (s *Store) WithLocalRates(rates []Rate) ([]Rate, error) {
-	rows, err := s.DB.Query("SELECT model, input_per_million, cached_input_per_million, output_per_million FROM rates ORDER BY rowid")
+	rows, err := s.DB.Query("SELECT model, input_per_million, cached_input_per_million, output_per_million, COALESCE(per_image, '0') FROM rates ORDER BY rowid")
 	if err != nil {
 		return nil, err
 	}
@@ -92,12 +103,12 @@ func (s *Store) WithLocalRates(rates []Rate) ([]Rate, error) {
 		}
 	}
 	for rows.Next() {
-		var model, input, cached, output sql.NullString
-		if err := rows.Scan(&model, &input, &cached, &output); err != nil {
+		var model, input, cached, output, perImage sql.NullString
+		if err := rows.Scan(&model, &input, &cached, &output, &perImage); err != nil {
 			return nil, err
 		}
 		result = append(result, Rate{Model: model.String, EffectiveFrom: "0001-01-01", SnapshotVersion: "local", Local: true,
-			Input: mustDec(input.String), CachedInput: mustDec(cached.String), Output: mustDec(output.String)})
+			Input: mustDec(input.String), CachedInput: mustDec(cached.String), Output: mustDec(output.String), PerImage: mustDec(perImage.String)})
 	}
 	return result, rows.Err()
 }
@@ -144,6 +155,8 @@ type Row struct {
 	Input       int64   `json:"input"`
 	Output      int64   `json:"output"`
 	Cached      *int64  `json:"cached"`
+	Turn        string  `json:"turn,omitempty"`
+	Images      *int64  `json:"images,omitempty"`
 	Source      string  `json:"-"`
 	Sequence    string  `json:"sequence"`
 	UsageStatus string  `json:"usage_status"`
@@ -178,6 +191,9 @@ func estimate(row Row, rates []Rate) (value Dec, snapshot string, assumed, ok bo
 	}
 	cached := *row.Cached
 	value = rate.Input.MulInt(row.Input - cached).Add(rate.CachedInput.MulInt(cached)).Add(rate.Output.MulInt(row.Output)).DivInt(1_000_000)
+	if row.Images != nil {
+		value = value.Add(rate.PerImage.MulInt(*row.Images))
+	}
 	return value, rate.SnapshotVersion, assumed, true
 }
 
@@ -331,7 +347,7 @@ func (s *Store) inheritedProjects(parents parentMap) (map[string]string, error) 
 
 func (s *Store) allRows() ([]Row, error) {
 	rows, err := s.DB.Query("SELECT id, session, parent, project, recorded_at, model, billing_mode, input, output, cached, " +
-		"source, sequence, usage_status, key_label FROM events ORDER BY recorded_at, id")
+		"source, sequence, usage_status, key_label, turn, images FROM events ORDER BY recorded_at, id")
 	if err != nil {
 		return nil, err
 	}
@@ -339,15 +355,15 @@ func (s *Store) allRows() ([]Row, error) {
 	var result []Row
 	for rows.Next() {
 		var r Row
-		var id, session, parent, project, recorded, model, billing, source, sequence, status, keyLabel sql.NullString
-		var input, output, cached sql.NullInt64
+		var id, session, parent, project, recorded, model, billing, source, sequence, status, keyLabel, turn sql.NullString
+		var input, output, cached, images sql.NullInt64
 		if err := rows.Scan(&id, &session, &parent, &project, &recorded, &model, &billing, &input, &output, &cached,
-			&source, &sequence, &status, &keyLabel); err != nil {
+			&source, &sequence, &status, &keyLabel, &turn, &images); err != nil {
 			return nil, err
 		}
 		r.ID, r.Session, r.Project, r.RecordedAt = id.String, session.String, project.String, recorded.String
 		r.Model, r.BillingMode, r.Source, r.Sequence, r.UsageStatus = model.String, billing.String, source.String, sequence.String, status.String
-		r.Input, r.Output = input.Int64, output.Int64
+		r.Input, r.Output, r.Turn = input.Int64, output.Int64, turn.String
 		if parent.Valid {
 			p := parent.String
 			r.Parent = &p
@@ -355,6 +371,10 @@ func (s *Store) allRows() ([]Row, error) {
 		if cached.Valid {
 			c := cached.Int64
 			r.Cached = &c
+		}
+		if images.Valid {
+			n := images.Int64
+			r.Images = &n
 		}
 		if keyLabel.Valid {
 			k := keyLabel.String
@@ -424,6 +444,7 @@ type Totals struct {
 	CostUnknownEvents         int   `json:"cost_unknown_events"`
 	CostAssumedEvents         int   `json:"cost_assumed_events"`
 	PricedTokens              int64 `json:"priced_tokens"`
+	Images                    int64 `json:"images"`
 	PaygUSD                   Dec   `json:"payg_usd"`
 	SubscriptionEquivalentUSD Dec   `json:"subscription_equivalent_usd"`
 	UnknownModeEquivalentUSD  Dec   `json:"unknown_mode_equivalent_usd"`
@@ -434,6 +455,9 @@ func totals(rows []Row, rates []Rate) Totals {
 	for _, row := range rows {
 		t.Input += row.Input
 		t.Output += row.Output
+		if row.Images != nil {
+			t.Images += *row.Images
+		}
 		if row.Cached != nil {
 			t.Cached += *row.Cached
 		} else {
@@ -515,18 +539,108 @@ type TimelinePoint struct {
 	Totals
 }
 
-func timeline(rows []Row, rates []Rate, unit string) []TimelinePoint {
-	layout := "2006-01-02"
-	if unit == "hour" {
-		layout = "2006-01-02T15:00"
+// bucketKey is the local time bucket a moment falls in: a day, an hour, or a 15-minute block.
+func bucketKey(t time.Time, unit string) string {
+	switch unit {
+	case "hour":
+		return t.Format("2006-01-02T15:00")
+	case "15m":
+		return t.Add(-time.Duration(t.Minute()%15) * time.Minute).Format("2006-01-02T15:04")
 	}
-	order, buckets := bucket(rows, func(r Row) string { return localTime(r.RecordedAt).Format(layout) })
+	return t.Format("2006-01-02")
+}
+
+func timeline(rows []Row, rates []Rate, unit string) []TimelinePoint {
+	order, buckets := bucket(rows, func(r Row) string { return bucketKey(localTime(r.RecordedAt), unit) })
 	sort.Strings(order)
 	result := []TimelinePoint{}
 	for _, key := range order {
 		result = append(result, TimelinePoint{key, totals(buckets[key], rates)})
 	}
 	return result
+}
+
+// Chart is the usage chart for a date range at one resolution. Every bucket in the range is
+// present, including empty ones and those still to come today, so that the bars keep their place
+// on the axis while usage arrives.
+type Chart struct {
+	Unit string `json:"unit"`
+	// Units are the resolutions the range allows; finer ones would draw too many bars.
+	Units   []string        `json:"units"`
+	Current string          `json:"current"` // the bucket holding now, or "" outside the range
+	Points  []TimelinePoint `json:"points"`
+}
+
+var chartUnits = []struct {
+	name    string
+	step    time.Duration
+	maxDays int
+}{{"15m", 15 * time.Minute, 2}, {"hour", time.Hour, 14}, {"day", 0, 0}}
+
+// chart buckets rows by the requested unit when the range allows it, and otherwise by the finest
+// unit that suits the range: 15-minute blocks for one day, hours for up to a week, days beyond.
+func chart(rows []Row, rates []Rate, f Filters, requested string) (Chart, error) {
+	start, end, err := bounds(f)
+	if err != nil {
+		return Chart{}, err
+	}
+	first := end
+	if start != nil {
+		first = *start
+	} else if len(rows) > 0 {
+		t := localTime(rows[0].RecordedAt)
+		first = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.Local)
+	}
+	stop := end.AddDate(0, 0, 1)
+	days := 0
+	for d := first; d.Before(stop); d = d.AddDate(0, 0, 1) {
+		days++
+	}
+	c := Chart{}
+	for _, u := range chartUnits {
+		if u.maxDays == 0 || days <= u.maxDays {
+			c.Units = append(c.Units, u.name)
+		}
+	}
+	c.Unit = "day"
+	if days <= 1 {
+		c.Unit = "15m"
+	} else if days <= 7 {
+		c.Unit = "hour"
+	}
+	for _, u := range c.Units {
+		if u == requested {
+			c.Unit = u
+		}
+	}
+	filled := map[string]TimelinePoint{}
+	for _, p := range timeline(rows, rates, c.Unit) {
+		filled[p.Bucket] = p
+	}
+	next := func(t time.Time) time.Time { return t.AddDate(0, 0, 1) }
+	for _, u := range chartUnits {
+		if u.name == c.Unit && u.step > 0 {
+			step := u.step
+			next = func(t time.Time) time.Time { return t.Add(step) }
+		}
+	}
+	empty := totals(nil, rates)
+	for t := first; t.Before(stop); t = next(t) {
+		key := bucketKey(t, c.Unit)
+		// The repeated hour when clocks go back is one bucket.
+		if n := len(c.Points); n > 0 && c.Points[n-1].Bucket == key {
+			continue
+		}
+		point, ok := filled[key]
+		if !ok {
+			point = TimelinePoint{key, empty}
+		}
+		c.Points = append(c.Points, point)
+	}
+	if moment := now().Local(); !moment.Before(first) && moment.Before(stop) {
+		c.Current = bucketKey(moment, c.Unit)
+	}
+	return c, nil
 }
 
 type SessionSummary struct {
@@ -661,7 +775,7 @@ func exportRows(rows []Row, rates []Rate) []ExportRow {
 }
 
 var exportFields = []string{"id", "session", "parent", "project", "recorded_at", "model", "billing_mode", "input", "output",
-	"cached", "sequence", "usage_status", "estimated_api_equivalent_usd", "pricing_snapshot", "rate_assumed", "key_label"}
+	"cached", "sequence", "usage_status", "estimated_api_equivalent_usd", "pricing_snapshot", "rate_assumed", "key_label", "images"}
 
 // csvRecord writes an export row as Python's csv module did: None as empty, booleans as True/False.
 func (e ExportRow) csvRecord() []string {
@@ -675,13 +789,17 @@ func (e ExportRow) csvRecord() []string {
 	if e.Cached != nil {
 		cached = fmt.Sprint(*e.Cached)
 	}
+	images := ""
+	if e.Images != nil {
+		images = fmt.Sprint(*e.Images)
+	}
 	assumed := "False"
 	if e.RateAssumed {
 		assumed = "True"
 	}
 	return []string{e.ID, e.Session, opt(e.Parent), e.Project, e.RecordedAt, e.Model, e.BillingMode, fmt.Sprint(e.Input),
 		fmt.Sprint(e.Output), cached, e.Sequence, e.UsageStatus, opt(e.EstimatedAPIEquivalentUSD), opt(e.PricingSnapshot), assumed,
-		opt(e.KeyLabel)}
+		opt(e.KeyLabel), images}
 }
 
 type TreeNode struct {
@@ -707,6 +825,7 @@ type SessionDetail struct {
 	Timeline          []TimelinePoint `json:"timeline"`
 	TimelineUnit      string          `json:"timeline_unit"`
 	Tree              *TreeNode       `json:"tree"`
+	Turns             []Turn          `json:"turns"`
 	Models            []Group         `json:"models"`
 	Events            []EstimatedRow  `json:"events"`
 }
@@ -790,7 +909,11 @@ func (s *Store) SessionDetail(session string, f Filters, rates []Rate) (*Session
 	if err != nil {
 		return nil, err
 	}
-	return &SessionDetail{ID: session, Parent: optional(parents[session]), Root: roots(parents)[session], Project: projectPtr,
+	turns, err := s.Turns(session, rows, rates)
+	if err != nil {
+		return nil, err
+	}
+	return &SessionDetail{ID: session, Turns: turns, Parent: optional(parents[session]), Root: roots(parents)[session], Project: projectPtr,
 		Started: started, LastActivity: last, BillingModes: ranked(rows, "billing_mode"), BillingDetections: detections,
 		Totals: totals(rows, rates),
 		Own:    totals(bySession[session], rates), Timeline: timeline(rows, rates, unit), TimelineUnit: unit,
@@ -801,11 +924,13 @@ type ProjectDetail struct {
 	Project  string           `json:"project"`
 	Totals   Totals           `json:"totals"`
 	Timeline []TimelinePoint  `json:"timeline"`
+	Chart    Chart            `json:"chart"`
 	Models   []Group          `json:"models"`
 	Sessions []SessionSummary `json:"sessions"`
 }
 
-func (s *Store) ProjectDetail(project string, f Filters, rates []Rate) (*ProjectDetail, error) {
+// ProjectDetail reports one project; resolution is the chart unit asked for, or "" for the default.
+func (s *Store) ProjectDetail(project string, f Filters, rates []Rate, resolution string) (*ProjectDetail, error) {
 	var one int
 	if err := s.DB.QueryRow("SELECT 1 FROM events WHERE project=? LIMIT 1", project).Scan(&one); err != nil {
 		if err == sql.ErrNoRows {
@@ -823,7 +948,11 @@ func (s *Store) ProjectDetail(project string, f Filters, rates []Rate) (*Project
 	if err != nil {
 		return nil, err
 	}
-	return &ProjectDetail{Project: project, Totals: totals(rows, rates), Timeline: timeline(rows, rates, "day"),
+	c, err := chart(rows, rates, scoped, resolution)
+	if err != nil {
+		return nil, err
+	}
+	return &ProjectDetail{Project: project, Totals: totals(rows, rates), Timeline: timeline(rows, rates, "day"), Chart: c,
 		Models: grouped(rows, "model", rates), Sessions: sessions}, nil
 }
 

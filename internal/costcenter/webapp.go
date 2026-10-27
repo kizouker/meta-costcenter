@@ -290,6 +290,8 @@ func (d *Dashboard) get(w http.ResponseWriter, r *http.Request) {
 		invalidFilter()
 		return
 	}
+	// The chart resolution is a display choice rather than a filter; an unknown one gets the default.
+	resolution, _ := last("resolution")
 	// Local rates are read on every request so edits on the Pricing page apply at once.
 	rates, err := d.Store.WithLocalRates(d.Rates)
 	if err != nil {
@@ -321,7 +323,7 @@ func (d *Dashboard) get(w http.ResponseWriter, r *http.Request) {
 	case endpoint == "sessions":
 		result, err = d.Store.SessionsFor(filters, rates)
 	case endpoint == "projects" && hasKey:
-		result, err = d.Store.ProjectDetail(key, filters, rates)
+		result, err = d.Store.ProjectDetail(key, filters, rates, resolution)
 	case endpoint == "projects":
 		var rows []Row
 		if rows, err = d.Store.Query(filters); err == nil {
@@ -359,7 +361,7 @@ func (d *Dashboard) get(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusOK, bytes.TrimRight(buf.Bytes(), "\n"), "application/json; charset=utf-8", "muse-usage.json")
 		return
 	default:
-		result, err = d.report(filters, echo, rates)
+		result, err = d.report(filters, echo, rates, resolution)
 	}
 	if err != nil {
 		d.fail(w, err)
@@ -387,7 +389,7 @@ type dashboardDay struct {
 	TimelinePoint
 }
 
-func (d *Dashboard) report(f Filters, echo map[string]any, rates []Rate) (map[string]any, error) {
+func (d *Dashboard) report(f Filters, echo map[string]any, rates []Rate, resolution string) (map[string]any, error) {
 	s := d.Store
 	rows, err := s.Query(f)
 	if err != nil {
@@ -406,6 +408,10 @@ func (d *Dashboard) report(f Filters, echo map[string]any, rates []Rate) (map[st
 	days := []dashboardDay{}
 	for _, point := range timeline(rows, rates, "day") {
 		days = append(days, dashboardDay{point.Bucket, point})
+	}
+	usageChart, err := chart(rows, rates, f, resolution)
+	if err != nil {
+		return nil, err
 	}
 	sessionRows, err := s.Sessions(rows, rates)
 	if err != nil {
@@ -476,7 +482,7 @@ func (d *Dashboard) report(f Filters, echo map[string]any, rates []Rate) (map[st
 		status["added"] = *state.Added
 	}
 	return map[string]any{"filters": echo, "totals": totals(rows, rates), "month": totals(monthly, rates), "groups": groups,
-		"timeline": days, "events": provenance, "session_count": len(sessionRows), "top_sessions": topSessions,
+		"timeline": days, "chart": usageChart, "events": provenance, "session_count": len(sessionRows), "top_sessions": topSessions,
 		"top_projects": topProjects, "options": options, "alerts": AnnotateAlerts(alerts, d.Config), "status": status,
 		"source_count": sources}, nil
 }

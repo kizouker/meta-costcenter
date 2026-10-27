@@ -1,11 +1,50 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useResource } from '../api.js';
 import { ChartPanel, EmptyRow, Metric, ModelsTable, NotFound, Share, TotalsMetrics } from '../components.jsx';
-import { BILLING_MODES, BILLING_SOURCES, cost, dateTime, duration, filterQuery, number, percent, periodLabel, periodOnly, shortId, tokens } from '../format.js';
+import { BILLING_MODES, BILLING_SOURCES, compact, cost, dateTime, duration, filterQuery, number, percent, periodLabel, periodOnly, shortId, tokens } from '../format.js';
 
-const PAGE = 100;
 const sessionLink = id => '/sessions/' + encodeURIComponent(id);
+const EFFORT_SOURCES = { flag: 'set with --effort when Muse started', settings: 'from Muse settings when the prompt was sent', default: 'Muse’s default; no effort was set' };
+const completionCost = row => row.api_equivalent_usd == null ? 'Unknown' : '$' + Number(row.api_equivalent_usd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 });
+
+const images = n => `${number(n)} image${n === 1 ? '' : 's'}`;
+
+/** Time since the turn started, as +m:ss. */
+function elapsed(start, at) {
+  const seconds = Math.max(0, Math.round((new Date(at) - new Date(start)) / 1000));
+  return `+${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+/** One prompt and everything it cost; expands to its completions, the subagents' among them. */
+function TurnRow({ turn, index, events, session }) {
+  const [open, setOpen] = useState(false);
+  const subagents = new Set(turn.subagent_sessions);
+  const completions = events.filter(row => row.session === session ? (row.turn || '') === turn.id : subagents.has(row.session));
+  const prompt = turn.prompt != null ? turn.prompt + (turn.prompt_truncated ? '…' : '')
+    : turn.recorded_by ? `Recorded by ${turn.recorded_by}; the prompt isn’t recorded`
+    : turn.id ? 'Prompt no longer in the Muse log' : 'Usage recorded before turns were tracked';
+  return <>
+    <tr className={'turn-row' + (open ? ' open' : '')}>
+      <td><button type="button" className="turn-toggle" aria-expanded={open} aria-label={`${open ? 'Hide' : 'Show'} completions of turn ${index + 1}`} onClick={() => setOpen(!open)}>{open ? '▾' : '▸'} {index + 1}</button></td>
+      <td className="nowrap">{dateTime(turn.started)}</td>
+      <td className={'turn-prompt' + (turn.prompt == null ? ' unavailable' : '')} title={prompt + (turn.prompts > 1 ? `\n\n${turn.prompts} prompts went into this turn; the first is shown.` : '')}><span className="text">{prompt}</span>{turn.prompts > 1 && <span className="tree-tag">+{turn.prompts - 1}</span>}</td>
+      <td>{turn.models.join(', ') || '—'}{turn.images > 0 && <span className="turn-subagents">{images(turn.images)}</span>}</td>
+      <td title={turn.effort ? EFFORT_SOURCES[turn.effort_source] : 'Not recorded. Turns record their effort once the prompt hook is installed with meta-cost hook install.'}>{turn.effort || '—'}</td>
+      <td className="numeric">{number(turn.completions)}{turn.subagents > 0 && <span className="turn-subagents">+ {turn.subagents} subagent{turn.subagents === 1 ? '' : 's'}</span>}</td>
+      <td className="numeric">{compact(turn.input)} / {compact(turn.output)}</td>
+      <td className="numeric">{cost(turn)}</td>
+    </tr>
+    {open && <tr className="turn-detail"><td colSpan={8}>
+      <table><thead><tr><th>Time</th><th>Agent</th><th>Model</th><th>Input (cached)</th><th>Output</th><th>Cost</th></tr></thead><tbody>
+        {!completions.length && <tr className="turn-note"><td colSpan={6}>No completions in this period.</td></tr>}
+        {completions.map(row => <tr key={row.id} className={row.session === session ? '' : 'subagent'}>
+          <td title={new Date(row.recorded_at).toLocaleString()}>{elapsed(turn.started, row.recorded_at)}</td>
+          <td>{row.session === session ? 'Main' : <Link className="row-link" to={sessionLink(row.session)} title={row.session}>Subagent {shortId(row.session)}</Link>}</td>
+          <td>{row.model}{row.images != null && ` · ${images(row.images)}`}</td><td>{number(row.input)} ({row.cached == null ? '?' : number(row.cached)})</td><td>{number(row.output)}</td><td>{completionCost(row)}</td></tr>)}
+      </tbody></table></td></tr>}
+  </>;
+}
 
 /** How the billing mode was found: the Muse hook's detections, or a hint when there are none. */
 function BillingSource({ detections }) {
@@ -33,14 +72,10 @@ export function NoUsageInPeriod({ filters, setFilters, subject }) {
 export default function SessionDetail({ filters, setFilters }) {
   const { id } = useParams();
   const { data, error, status } = useResource(`/api/sessions/${encodeURIComponent(id)}?` + filterQuery(periodOnly(filters)));
-  const [page, setPage] = useState(0);
   const [copied, setCopied] = useState(false);
-  useEffect(() => setPage(0), [id]);
   if (status === 404) return <NotFound kind="Session" message={`No usage has been recorded for session ${id}.`} />;
   if (!data) return error ? <div className="notice danger" role="alert">{error}</div> : <div className="loading-state" role="status">Loading session…</div>;
   const t = data.totals, family = tokens(t);
-  const pages = Math.max(1, Math.ceil(data.events.length / PAGE)), current = Math.min(page, pages - 1);
-  const events = data.events.slice(current * PAGE, (current + 1) * PAGE);
   function copy() { navigator.clipboard?.writeText(data.id).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }
   return <>
     <nav className="breadcrumb" aria-label="Breadcrumb"><Link to="/sessions">Sessions</Link>
@@ -60,21 +95,16 @@ export default function SessionDetail({ filters, setFilters }) {
     {!t.events && <NoUsageInPeriod filters={filters} setFilters={setFilters} subject="session" />}
     <TotalsMetrics totals={t} extra={<Metric label="This session alone" icon="◷" id="own-share" accent value={percent(tokens(data.own), family).toFixed(1) + '%'}
       description={`${number(tokens(data.own))} tokens · ${cost(data.own)} · subagents make up the rest`} />} />
+    <section className="panel" id="turns"><div className="panel-heading"><div><h2>Turns</h2><p>Each prompt and what it cost, including the subagents it started. Prompts are read from the Muse log and never stored.</p></div></div>
+      <div className="table-wrap"><table><thead><tr><th>#</th><th>Started</th><th>Prompt</th><th>Model</th><th>Effort</th><th>Completions</th><th>Input / output</th><th>Cost</th></tr></thead><tbody id="turn-rows">
+        {!data.turns.length && <EmptyRow columns={8}>No turns in this period.</EmptyRow>}
+        {data.turns.map((turn, i) => <TurnRow key={turn.id || 'untracked'} turn={turn} index={i} events={data.events} session={data.id} />)}
+      </tbody></table></div></section>
     <section className="chart-layout"><ChartPanel timeline={data.timeline} unit={data.timeline_unit} />
       <article className="panel" id="subagents"><div className="panel-heading"><div><h2>Subagents</h2><p>Each session’s own usage and share of the total</p></div></div>
         {data.tree && data.tree.children.length ? <ul className="tree" id="subagent-tree"><TreeNode node={data.tree} total={family} current={data.id} /></ul>
           : <p className="panel-empty">This session started no subagents{t.events ? '' : ' in this period'}.</p>}
       </article></section>
     <section className="panel"><div className="panel-heading"><h2>Models</h2></div><ModelsTable models={data.models} total={family} /></section>
-    <section className="panel" id="events"><div className="panel-heading"><div><h2>Model completions</h2><p>Every recorded completion for this session and its subagents, oldest first</p></div>
-      {pages > 1 && <div className="pager"><button type="button" disabled={current === 0} onClick={() => setPage(current - 1)}>Previous</button><span>Page {current + 1} of {pages}</span><button type="button" disabled={current === pages - 1} onClick={() => setPage(current + 1)}>Next</button></div>}</div>
-      <div className="table-wrap"><table><thead><tr><th>Observed</th><th>Session</th><th>Model</th><th>Input / output</th><th>Cached</th><th>API-equivalent cost</th><th>Provenance</th></tr></thead><tbody id="event-rows">
-        {!events.length && <EmptyRow columns={7}>No completions in this period.</EmptyRow>}
-        {events.map(row => <tr key={row.id}><td>{new Date(row.recorded_at).toLocaleString()}</td>
-          <td>{row.session === data.id ? <span title={row.session}>{shortId(row.session)}</span> : <Link className="row-link nowrap" to={sessionLink(row.session)} title={row.session}>{shortId(row.session)}</Link>}</td>
-          <td>{row.model}</td><td>{number(row.input)} / {number(row.output)}</td><td>{row.cached == null ? 'Unknown' : number(row.cached)}</td>
-          <td>{row.api_equivalent_usd == null ? 'Unknown' : '$' + Number(row.api_equivalent_usd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })}</td>
-          <td className="record" title={`Record ${row.id}; sequence ${row.sequence}; usage ${row.usage_status}; pricing ${row.pricing_snapshot || 'unknown'}`}>#{row.sequence} · {row.id}</td></tr>)}
-      </tbody></table></div></section>
   </>;
 }

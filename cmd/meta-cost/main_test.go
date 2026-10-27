@@ -294,3 +294,44 @@ func TestTerminalRefreshFiltersAndExit(t *testing.T) {
 		t.Fatalf("input %v", input)
 	}
 }
+
+func TestRecordImageUsage(t *testing.T) {
+	c := newCLI(t)
+	var recorded map[string]any
+	record := []string{"record", "--model", "muse-image-1.0", "--images", "2", "--input-tokens", "500", "--output-tokens", "4000",
+		"--tool", "gen-image", "--key", "jolly-challenge", "--project", "jolly", "--id", "call-1"}
+	c.json(&recorded, record...)
+	// Image models cost $0.01 per image; the tokens their responses report are not billed.
+	if recorded["recorded"] != true || recorded["estimated_api_equivalent_usd"] != "0.02" || recorded["billing_mode"] != "payg" ||
+		recorded["session"] != "gen-image-"+time.Now().Format("2006-01-02") {
+		t.Fatalf("%v", recorded)
+	}
+	if c.json(&recorded, record...); recorded["recorded"] != false {
+		t.Fatal("the same ID was recorded twice")
+	}
+	var rows []map[string]any
+	c.json(&rows, "export", "--period", "all", "--project", "jolly")
+	if len(rows) != 1 || rows[0]["images"] != float64(2) || rows[0]["estimated_api_equivalent_usd"] != "0.02" ||
+		rows[0]["key_label"] != "jolly-challenge" || rows[0]["billing_mode"] != "payg" {
+		t.Fatalf("%v", rows)
+	}
+	for _, bad := range [][]string{{"record", "--images", "1"}, {"record", "--model", "m", "--images", "-1"},
+		{"record", "--model", "m", "--input-tokens", "5", "--cached-tokens", "6"}} {
+		if code, _, stderr := c.run(bad...); code != 1 || !strings.HasPrefix(stderr, "meta-cost: ") {
+			t.Errorf("%v exited %d: %s", bad, code, stderr)
+		}
+	}
+	// Without --project, the usage belongs to the git repository it was recorded in.
+	repo := filepath.Join(c.root, "my-game")
+	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
+	os.MkdirAll(filepath.Join(repo, "scripts"), 0o755)
+	cmd := c.cmd("record", "--model", "muse-image-1.0", "--images", "1")
+	cmd.Dir = filepath.Join(repo, "scripts")
+	out, err := cmd.Output()
+	if err == nil {
+		err = json.Unmarshal(out, &recorded)
+	}
+	if err != nil || recorded["project"] != "my-game" {
+		t.Fatalf("%s %v", out, err)
+	}
+}

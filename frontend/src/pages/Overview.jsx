@@ -19,7 +19,7 @@ function CostByModel({ data }) {
   </article>;
 }
 
-export default function Overview({ data }) {
+export default function Overview({ data, setResolution }) {
   const t = data.totals, activeDays = data.timeline.filter(day => day.events).length;
   return <>
     <section className="metrics" aria-label="Usage totals">
@@ -28,7 +28,7 @@ export default function Overview({ data }) {
       <Metric label="Input tokens" icon="↗" id="input" value={t.input >= 1e8 ? compact(t.input) : number(t.input)} descriptionId="output-label" description={`${compact(t.output)} output · ${compact(t.cached)} cached`} />
       <Metric label="Active sessions" icon="◷" id="session-count" value={number(data.session_count)} descriptionId="month-label" description={`View all sessions · MTD ${cost(data.month)}`} accent to="/sessions" />
     </section>
-    <section className="chart-layout"><ChartPanel timeline={data.timeline} /><CostByModel data={data} /></section>
+    <section className="chart-layout"><ChartPanel chart={data.chart} setResolution={setResolution} /><CostByModel data={data} /></section>
     <section className="top-layout">
       <article className="panel" id="top-sessions"><div className="panel-heading"><div><h2>Top sessions</h2><p>Highest estimated cost, subagents included</p></div><Link className="panel-link" to="/sessions">All sessions →</Link></div>
         <ul className="rank-list" id="top-session-rows">{!data.top_sessions.length && <li className="rank-empty">No sessions in this period.</li>}

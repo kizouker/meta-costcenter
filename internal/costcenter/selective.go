@@ -24,6 +24,8 @@ var recordFields = keep{
 	"payload": keep{
 		"event":  keep{"kind": nil, "model": nil, "usage": nil},
 		"record": keep{"workspace_root": nil, "model_id": nil},
+		// Turns: a completion's run, and the run a prompt started or joined. Never the prompt text.
+		"run_id": nil, "intent_id": nil, "outcome": keep{"run_id": nil},
 	},
 }
 

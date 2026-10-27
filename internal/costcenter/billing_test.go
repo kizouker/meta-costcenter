@@ -217,7 +217,7 @@ func TestInstallHookKeepsOtherSettings(t *testing.T) {
   "Stop": [{"hooks": [{"type": "command", "command": "echo stop"}]}]}}`
 	path := settingsFile(t, original)
 	command := "/usr/local/bin/meta-cost hook session-start"
-	changed, err := InstallHook(path, command)
+	changed, err := InstallHook(path, map[string]string{"SessionStart": command})
 	if err != nil || !changed {
 		t.Fatalf("install %v %v", changed, err)
 	}
@@ -235,11 +235,11 @@ func TestInstallHookKeepsOtherSettings(t *testing.T) {
 	if len(hooks["SessionStart"].([]any)) != 2 || len(hooks["Stop"].([]any)) != 1 {
 		t.Fatalf("hooks %v", hooks)
 	}
-	if changed, err := InstallHook(path, command); err != nil || changed {
+	if changed, err := InstallHook(path, map[string]string{"SessionStart": command}); err != nil || changed {
 		t.Fatalf("second install %v %v", changed, err)
 	}
 	// A moved binary updates the existing entry rather than adding a second one.
-	if changed, err := InstallHook(path, "/home/me/go/bin/meta-cost hook session-start"); err != nil || !changed {
+	if changed, err := InstallHook(path, map[string]string{"SessionStart": "/home/me/go/bin/meta-cost hook session-start"}); err != nil || !changed {
 		t.Fatalf("reinstall %v %v", changed, err)
 	}
 	if groups := readJSON(t, path)["hooks"].(map[string]any)["SessionStart"].([]any); len(groups) != 2 {
@@ -266,7 +266,7 @@ func mustJSON(value any) []byte {
 
 func TestInstallHookIntoSettingsWithoutHooks(t *testing.T) {
 	path := settingsFile(t, `{"schema_version": 1}`)
-	if _, err := InstallHook(path, "meta-cost hook session-start"); err != nil {
+	if _, err := InstallHook(path, map[string]string{"SessionStart": "meta-cost hook session-start"}); err != nil {
 		t.Fatal(err)
 	}
 	if changed, err := UninstallHook(path); err != nil || !changed {
@@ -275,11 +275,11 @@ func TestInstallHookIntoSettingsWithoutHooks(t *testing.T) {
 	if after := readJSON(t, path); len(after) != 1 {
 		t.Fatalf("empty hooks table left behind: %v", after)
 	}
-	if _, err := InstallHook(filepath.Join(t.TempDir(), "settings.json"), "x"); err == nil ||
+	if _, err := InstallHook(filepath.Join(t.TempDir(), "settings.json"), map[string]string{"SessionStart": "x"}); err == nil ||
 		!strings.Contains(err.Error(), "run Muse once") {
 		t.Fatalf("missing settings: %v", err)
 	}
-	if _, err := InstallHook(settingsFile(t, `{"hooks": []}`), "x"); err == nil {
+	if _, err := InstallHook(settingsFile(t, `{"hooks": []}`), map[string]string{"SessionStart": "x"}); err == nil {
 		t.Fatal("accepted a hooks list")
 	}
 }
@@ -293,7 +293,7 @@ func TestBillingDiagnosticsAndBackfill(t *testing.T) {
 	if err != nil || d.HookInstalled || d.Warning == nil || !strings.Contains(*d.Warning, "hook install") {
 		t.Fatalf("not installed: %+v %v", d, err)
 	}
-	InstallHook(settings, "/bin/meta-cost hook session-start")
+	InstallHook(settings, map[string]string{"SessionStart": "/bin/meta-cost hook session-start"})
 	// A detection from before the session, for another session: the hook was running, yet this session has none.
 	f.detection("earlier", "2000-01-01T00:00:00+00:00", "payg", "")
 	d, _ = f.store.BillingDiagnostics(settings, nil)
@@ -330,12 +330,13 @@ func TestAuthPathFollowsTheMuseProcess(t *testing.T) {
 			t.Fatalf("%+v: %s, want %s", env, got, want)
 		}
 	}
-	command, err := hookCommandLine("~/data/costs.sqlite3", "/etc/meta cost.toml")
+	command, err := hookCommandLine("hook session-start", "~/data/costs.sqlite3", "/etc/meta cost.toml")
 	if err != nil || !strings.Contains(command, " hook session-start --db /") ||
 		!strings.Contains(command, "--config '/etc/meta cost.toml'") || strings.Contains(command, "~") {
 		t.Fatalf("command %q, %v", command, err)
 	}
-	if !isOurHook("/home/me/.local/bin/meta-cost hook session-start --db /d --config /c") || isOurHook("echo hook session-start") {
+	if !isOurHook("/home/me/.local/bin/meta-cost hook session-start --db /d --config /c", "hook session-start") || isOurHook("echo hook session-start", "") ||
+		isOurHook("/bin/meta-cost hook prompt-submit", "hook session-start") || !isOurHook("/bin/meta-cost hook prompt-submit", "") {
 		t.Fatal("isOurHook")
 	}
 }

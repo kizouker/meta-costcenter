@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY, session TEXT, parent TEXT, project TEXT,
   recorded_at TEXT, model TEXT, billing_mode TEXT, input INTEGER,
   output INTEGER, cached INTEGER, source TEXT, sequence TEXT,
-  usage_status TEXT, key_label TEXT);
+  usage_status TEXT, key_label TEXT, turn TEXT, images INTEGER);
 CREATE INDEX IF NOT EXISTS events_time ON events(recorded_at);
 CREATE INDEX IF NOT EXISTS events_session ON events(session);
 CREATE TABLE IF NOT EXISTS metadata (source TEXT PRIMARY KEY, project TEXT, model TEXT);
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 -- Rates entered on this machine for models without public pricing. Never exported to the repo.
 CREATE TABLE IF NOT EXISTS rates (
   model TEXT PRIMARY KEY, input_per_million TEXT, cached_input_per_million TEXT,
-  output_per_million TEXT, updated_at TEXT);
+  output_per_million TEXT, updated_at TEXT, per_image TEXT);
 CREATE TABLE IF NOT EXISTS alerts (
   id INTEGER PRIMARY KEY, period TEXT, project TEXT, billing_mode TEXT,
   limit_usd TEXT, warn_levels TEXT DEFAULT '[80]', enabled INTEGER DEFAULT 1, created_at TEXT,
@@ -47,7 +47,16 @@ CREATE TABLE IF NOT EXISTS alerts (
 CREATE TABLE IF NOT EXISTS session_billing (
   session TEXT, detected_at TEXT, billing_mode TEXT, source TEXT,
   key_label TEXT, hook_source TEXT, detail TEXT,
-  PRIMARY KEY (session, detected_at));`
+  PRIMARY KEY (session, detected_at));
+-- Where each prompt is in its session log. The text is read from the log when a session page asks
+-- for it and is never stored. turn is the run the prompt started or was added to.
+CREATE TABLE IF NOT EXISTS prompts (
+  intent TEXT PRIMARY KEY, session TEXT, turn TEXT, recorded_at TEXT, source TEXT, offset INTEGER);
+CREATE INDEX IF NOT EXISTS prompts_session ON prompts(session);
+-- The reasoning effort Muse was configured with when each prompt was submitted, from the
+-- UserPromptSubmit hook. efforts is the per-model map, since the model is only known afterwards.
+CREATE TABLE IF NOT EXISTS turn_settings (
+  turn TEXT PRIMARY KEY, session TEXT, recorded_at TEXT, model TEXT, effort TEXT, efforts TEXT, source TEXT);`
 
 // Store is the usage database. Its *sql.DB is safe for concurrent use by the dashboard.
 type Store struct {
@@ -85,7 +94,7 @@ func openStore(path string, busyMS int) (*Store, error) {
 		return nil, err
 	}
 	for _, migrate := range []func() error{s.migrateWarnLevels, s.migrateKeyRevocation, s.migrateMonthlyWarning,
-		s.migrateKeyLabel} {
+		s.migrateKeyLabel, s.migrateTurn, s.migrateImages, s.migrateImageRates} {
 		if err := migrate(); err != nil {
 			db.Close()
 			return nil, err
@@ -175,6 +184,38 @@ func (s *Store) migrateKeyLabel() error {
 		return err
 	}
 	_, err = s.DB.Exec("ALTER TABLE events ADD COLUMN key_label TEXT")
+	return err
+}
+
+// migrateTurn: events record the Muse turn (run) they belong to. Older events get it when their logs
+// are read again, which a parser version change triggers.
+func (s *Store) migrateTurn() error {
+	columns, err := s.columns("events")
+	if err != nil || columns["turn"] {
+		return err
+	}
+	_, err = s.DB.Exec("ALTER TABLE events ADD COLUMN turn TEXT")
+	return err
+}
+
+// migrateImages: usage recorded with `meta-cost record` can count generated images, which image
+// models charge for instead of tokens.
+func (s *Store) migrateImages() error {
+	columns, err := s.columns("events")
+	if err != nil || columns["images"] {
+		return err
+	}
+	_, err = s.DB.Exec("ALTER TABLE events ADD COLUMN images INTEGER")
+	return err
+}
+
+// migrateImageRates: local rates can price images as well as tokens.
+func (s *Store) migrateImageRates() error {
+	columns, err := s.columns("rates")
+	if err != nil || columns["per_image"] {
+		return err
+	}
+	_, err = s.DB.Exec("ALTER TABLE rates ADD COLUMN per_image TEXT")
 	return err
 }
 

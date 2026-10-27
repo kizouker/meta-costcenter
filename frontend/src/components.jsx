@@ -115,13 +115,23 @@ export function FilterChips({ filters, setFilters, openFilters, scoped }) {
   </div>;
 }
 
-function chartLabel(key, unit, index, points) {
-  if (unit !== 'hour') return key.slice(5);
+const UNIT_NAMES = { day: 'day', hour: 'hour', '15m': '15 minutes' };
+const RESOLUTIONS = [['15m', '15 min'], ['hour', 'Hour'], ['day', 'Day']];
+/** Every how many bars an axis label goes; intraday axes are labelled on round hours. */
+function tickStride(unit, count, aligned, width) {
+  if (!aligned || unit === 'day') return count <= 7 ? 1 : Math.ceil(count / 6);
+  const perHour = unit === '15m' ? 4 : 1, labels = Math.max(3, Math.min(8, Math.floor((width - 80) / 60)));
+  return perHour * ([1, 2, 3, 4, 6, 12, 24, 48].find(hours => count / (hours * perHour) <= labels) || 96);
+}
+function chartLabel(key, unit, index, points, aligned) {
+  if (unit === 'day') return key.slice(5);
+  if (aligned) return points.length > (unit === '15m' ? 96 : 24) && key.endsWith('T00:00') ? key.slice(5, 10) : key.slice(11);
   const sameDay = points.every(point => point.bucket.slice(0, 10) === points[0].bucket.slice(0, 10));
   return sameDay || (index > 0 && points[index - 1].bucket.slice(0, 10) === key.slice(0, 10)) ? key.slice(11) : key.slice(5, 10) + ' ' + key.slice(11);
 }
-/** Stacked input/output token bars, or estimated cost bars with unpriced periods marked. */
-export function UsageChart({ timeline, unit = 'day', metric = 'tokens' }) {
+/** Stacked input/output token bars, or estimated cost bars with unpriced periods marked. An aligned
+ * timeline has every bucket of its range, so its labels fall on round hours and now can be marked. */
+export function UsageChart({ timeline, unit = 'day', metric = 'tokens', current = '', aligned = false }) {
   const container = useRef(null);
   const [width, setWidth] = useState(600);
   useLayoutEffect(() => {
@@ -133,12 +143,14 @@ export function UsageChart({ timeline, unit = 'day', metric = 'tokens' }) {
   const max = Math.max(...timeline.map(point => isCost ? equivalent(point) : point.input + point.output), isCost ? 0.01 : 1);
   const axis = value => isCost ? '$' + (max < 10 ? value.toFixed(2) : compact(value)) : compact(value);
   const step = (width - 80) / Math.max(timeline.length, 1), bar = Math.max(1, Math.min(24, step * .55));
-  return <div ref={container} id="chart" className="chart" role="img" aria-label={`${isCost ? 'Estimated cost' : 'Token usage'} by ${unit}`}>
+  const stride = tickStride(unit, timeline.length, aligned, width), nowIndex = timeline.findIndex(point => point.bucket === current);
+  return <div ref={container} id="chart" className="chart" role="img" aria-label={`${isCost ? 'Estimated cost' : 'Token usage'} by ${UNIT_NAMES[unit]}`}>
     {!timeline.length ? <span>No observed usage in this date range.</span> : <svg viewBox={`0 0 ${width} 205`} role="presentation">
       {[0, 1, 2, 3].map(i => <g key={i}><line x1="68" y1={16 + i * 49} x2={width - 8} y2={16 + i * 49} stroke="#b8c1cd" strokeDasharray="3 4" /><text x="60" y={22 + i * 49} textAnchor="end">{axis(max * (1 - i / 3))}</text></g>)}
+      {nowIndex >= 0 && <g className="now-marker"><line x1={70 + step * (nowIndex + .5)} y1="10" x2={70 + step * (nowIndex + .5)} y2="163" /><title>Now</title></g>}
       {timeline.map((point, i) => {
-        const x = 70 + step * (i + .5) - bar / 2, label = point.bucket.replace('T', ' ');
-        const tick = (timeline.length <= 7 || i % Math.ceil(timeline.length / 6) === 0 || i === timeline.length - 1) && <text x={x + bar / 2} y="190" textAnchor="middle">{chartLabel(point.bucket, unit, i, timeline)}</text>;
+        const x = 70 + step * (i + .5) - bar / 2, label = point.bucket.replace('T', ' ') + (unit === '15m' ? ' (15 min)' : '');
+        const tick = (i % stride === 0 || (!aligned && i === timeline.length - 1)) && <text x={x + bar / 2} y="190" textAnchor="middle">{chartLabel(point.bucket, unit, i, timeline, aligned)}</text>;
         if (isCost) {
           const height = equivalent(point) / max * 147, unpriced = point.cost_unknown_events > 0;
           return <g key={point.bucket} className="cost-bar"><rect x={x} y={163 - height} width={bar} height={height} fill="#005c45" rx="2">
@@ -151,16 +163,21 @@ export function UsageChart({ timeline, unit = 'day', metric = 'tokens' }) {
     </svg>}
   </div>;
 }
-export function ChartPanel({ timeline, unit = 'day' }) {
+/** The usage chart. Given a chart from the API it draws that, with a choice of the resolutions the
+ * date range allows; otherwise it draws a plain timeline in its given unit. */
+export function ChartPanel({ timeline, unit = 'day', chart, setResolution }) {
   const [metric, setMetric] = useState(() => { try { return localStorage.getItem('muse-cost.chart') || 'cost'; } catch { return 'cost'; } });
   function choose(value) { setMetric(value); try { localStorage.setItem('muse-cost.chart', value); } catch { /* Storage may be disabled. */ } }
-  const isCost = metric === 'cost', period = unit === 'hour' ? 'hour' : 'calendar day';
+  if (chart) { timeline = chart.points; unit = chart.unit; }
+  const isCost = metric === 'cost', period = { hour: 'hour', '15m': '15-minute block' }[unit] || 'calendar day';
   return <article className="panel"><div className="panel-heading"><div><h2>{isCost ? 'Cost over time' : 'Usage over time'}</h2>
     <p>{isCost ? `Estimated API-equivalent USD by local ${period}` : `Measured tokens by local ${period}`}</p></div>
     <div className="chart-controls">
+      {chart && setResolution && chart.units.length > 1 && <div className="tabs" role="group" aria-label="Chart resolution">{RESOLUTIONS.filter(([key]) => chart.units.includes(key)).map(([key, label]) =>
+        <button key={key} type="button" data-resolution={key} className={unit === key ? 'selected' : ''} aria-pressed={unit === key} onClick={() => setResolution(key)}>{label}</button>)}</div>}
       <div className="tabs" role="group" aria-label="Chart shows">{[['cost', 'Cost'], ['tokens', 'Tokens']].map(([key, label]) => <button key={key} type="button" data-metric={key} className={metric === key ? 'selected' : ''} aria-pressed={metric === key} onClick={() => choose(key)}>{label}</button>)}</div>
       <div className="legend">{isCost ? <><span className="dot input-dot" />Estimated<span className="dot output-dot" />Has unpriced usage</> : <><span className="dot input-dot" />Input<span className="dot output-dot" />Output</>}</div>
-    </div></div><UsageChart timeline={timeline} unit={unit} metric={metric} /></article>;
+    </div></div><UsageChart timeline={timeline} unit={unit} metric={metric} current={chart?.current} aligned={Boolean(chart)} /></article>;
 }
 
 export function Metric({ label, icon, id, value, description, descriptionId, accent, to }) {

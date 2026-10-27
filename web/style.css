@@ -647,3 +647,18 @@ body { padding-top: var(--alert-bar, 0px); }
 .keyguard-warning { color: #624300; font-weight: 400; }
 #keyguard table { margin-top: 4px; }
 #keyguard > .notice { margin: 0 22px 18px; }
+.chart .now-marker line { stroke: #5b6676; stroke-width: 1.5; stroke-dasharray: 4 3; }
+#turns th, #turns td { padding-inline: 12px; text-align: left; }
+#turns th:nth-child(n+6), #turns td.numeric { text-align: right; white-space: nowrap; }
+#turns .turn-prompt { width: 100%; min-width: 280px; white-space: normal; }
+#turns .turn-prompt span.text { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; line-height: 1.4; }
+#turns .turn-prompt.unavailable, #turns .turn-note td { color: #5b6676; font-style: italic; }
+#turns .turn-subagents { display: block; color: #5b6676; font-size: 14px; }
+#turns .turn-toggle { border: 0; background: transparent; padding: 2px 4px; font: inherit; color: #00533d; cursor: pointer; white-space: nowrap; }
+#turns .turn-row.open td { border-bottom-color: transparent; }
+#turns .turn-detail > td { background: #f6f8f4; padding: 8px 12px 14px 36px; max-width: none; font-weight: 400; }
+#turns .turn-detail table { width: auto; min-width: 60%; }
+#turns .turn-detail td, #turns .turn-detail th { font-weight: 400; font-size: 15px; padding: 6px 12px; background: transparent; }
+#turns .turn-detail td:not(:nth-child(-n+3)), #turns .turn-detail th:not(:nth-child(-n+3)) { text-align: right; }
+@media (max-width: 720px) { #turns .turn-prompt { min-width: 200px; } }
+#turns .turn-detail tr.subagent td { color: #5b6676; }

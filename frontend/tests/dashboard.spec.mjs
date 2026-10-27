@@ -152,24 +152,44 @@ test('dashboard', async ({ page }) => {
   await expect(page).toHaveURL(base + '/sessions/session-3');
   await expect(page.locator('h1')).toHaveText('Session');
   await expect(page.locator('.chip-note')).toBeVisible();
-  await expect(page.locator('#event-rows tr')).toHaveCount(5);
+  // Completions are listed per turn. The fixture's usage predates turns, so it forms one
+  // untracked turn holding the session's completions and its subagent's.
+  const completions = page.locator('#turn-rows .turn-detail tbody tr');
+  await page.locator('#turn-rows .turn-toggle').first().click();
+  await expect(completions).toHaveCount(5);
+  await expect(page.locator('#events')).toHaveCount(0);
   await expect(page.locator('#subagent-tree')).toContainText('sub-3a');
   // No hook ran for the fixture, so the page explains how billing modes get recorded.
   await expect(page.locator('#billing-source')).toContainText('meta-cost hook install');
   fs.appendFileSync(path.join(logs, 'session-3', 'session.jsonl'), jsonl([event('new-live', 'session-3', 1234, 100, 'muse-spark-1.3')]));
-  await expect(page.locator('#event-rows tr')).toHaveCount(6, { timeout: 10_000 });
-  await expect(page.locator('#event-rows')).toContainText('new-live');
+  await expect(completions).toHaveCount(6, { timeout: 10_000 });
   await page.reload();
   await expect(page.locator('h1')).toHaveText('Session');
-  await expect(page.locator('#event-rows tr')).toHaveCount(6);
+  await page.locator('#turn-rows .turn-toggle').first().click();
+  await expect(completions).toHaveCount(6);
   const downloading = page.waitForEvent('download');
   await page.locator('#export').click();
   const exported = JSON.parse(fs.readFileSync(await (await downloading).path(), 'utf8'));
   expect(exported).toHaveLength(6);
   expect(new Set(exported.map((row) => row.session))).toEqual(new Set(['session-3', 'sub-3a']));
+  // Turns: earlier usage has no turn; a new prompt and its completion form one, with the prompt
+  // read from the log and the subagent counted in the turn it ran during.
+  await expect(page.locator('#turn-rows')).toContainText('Usage recorded before turns were tracked');
+  await expect(page.locator('#turn-rows .turn-detail')).toContainText('Subagent sub-3a');
+  await page.locator('#turn-rows .turn-toggle').first().click();
+  const prompt = { id: 'prompt-1', stream: { id: 'session-3' }, sequence: 2, recorded_at: Date.now() * 1000, payload_type: 'runtime.user_intent.accepted',
+    payload: { intent_id: 'turn-1', refill_blocks: [{ kind: 'text', text: 'Summarise the README for me' }] } };
+  const answer = event('turn-event', 'session-3', 0, 0, 'muse-spark-1.3');
+  answer.payload.run_id = 'turn-1';
+  fs.appendFileSync(path.join(logs, 'session-3', 'session.jsonl'), jsonl([prompt, answer]));
+  await expect(page.locator('#turn-rows')).toContainText('Summarise the README for me', { timeout: 10_000 });
+  await page.locator('#turn-rows .turn-toggle').last().click();
+  await expect(page.locator('#turn-rows .turn-detail tbody tr')).toHaveCount(1);
+  await expect(page.locator('#turn-rows .turn-row').last()).toContainText('—');
   await page.locator('#subagent-tree a', { hasText: 'sub-3a' }).click();
   await expect(page).toHaveURL(base + '/sessions/sub-3a');
-  await expect(page.locator('#event-rows tr')).toHaveCount(2);
+  await page.locator('#turn-rows .turn-toggle').first().click();
+  await expect(completions).toHaveCount(2);
   await page.locator('#parent-link').click();
   await expect(page).toHaveURL(base + '/sessions/session-3');
   await page.goBack();
@@ -198,12 +218,24 @@ test('dashboard', async ({ page }) => {
   await expect(page.locator('#session-count')).toHaveText('2');
   await expect(input).toHaveText('151,234');
 
-  // Chart toggle: cost by default, tokens on request.
+  // Chart toggle: cost by default, tokens on request. All the usage is from today, so the chart
+  // starts in 15-minute blocks with the whole day on the axis and now marked.
   await page.locator('.nav', { hasText: 'Overview' }).click();
-  await expect(page.locator('#chart')).toHaveAttribute('aria-label', 'Estimated cost by day');
+  await expect(page.locator('#chart')).toHaveAttribute('aria-label', 'Estimated cost by 15 minutes');
+  await expect(page.locator('#chart .cost-bar')).toHaveCount(96);
+  await expect(page.locator('#chart .now-marker')).toHaveCount(1);
   await page.locator('[data-metric=tokens]').click();
-  await expect(page.locator('#chart')).toHaveAttribute('aria-label', 'Token usage by day');
+  await expect(page.locator('#chart')).toHaveAttribute('aria-label', 'Token usage by 15 minutes');
   await page.locator('[data-metric=cost]').click();
+  await page.locator('[data-resolution=hour]').click();
+  await expect(page.locator('#chart')).toHaveAttribute('aria-label', 'Estimated cost by hour');
+  await expect(page.locator('#chart .cost-bar')).toHaveCount(24);
+  await page.locator('[data-resolution=day]').click();
+  await expect(page.locator('#chart')).toHaveAttribute('aria-label', 'Estimated cost by day');
+  await page.reload();
+  await expect(page.locator('#chart')).toHaveAttribute('aria-label', 'Estimated cost by day');
+  await page.locator('[data-resolution="15m"]').click();
+  await expect(page.locator('#chart')).toHaveAttribute('aria-label', 'Estimated cost by 15 minutes');
 
   // Alerts: a tiny daily limit is exceeded at once and raises the banner on every page.
   // A stub records desktop notifications, as if permission had been granted.

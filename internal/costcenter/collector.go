@@ -21,9 +21,10 @@ import (
 )
 
 // Version 1 adapter: native envelope -> payload.event.model_completed. Only allowlisted usage
-// fields reach SQLite. Transcript fields are never persisted.
+// fields reach SQLite. Transcript fields are never persisted. Version 2 adds each completion's turn
+// and where each prompt is in the log, so logs read by version 1 are read again once.
 
-const parserVersion = 1
+const parserVersion = 2
 
 // SessionMeta is an explicit project or billing mode for one session, from the config file.
 type SessionMeta struct {
@@ -256,8 +257,9 @@ func (s *Store) Ingest(path, project, billingMode string) (int, error) {
 	source := resolved
 	var previous *sourceState
 	var row sourceState
-	err = s.DB.QueryRow("SELECT COALESCE(identity, ''), COALESCE(offset, 0), COALESCE(anchor, ''), COALESCE(errors, 0) FROM sources WHERE path=?", source).
-		Scan(&row.identity, &row.offset, &row.anchor, &row.errors)
+	var version int64
+	err = s.DB.QueryRow("SELECT COALESCE(identity, ''), COALESCE(offset, 0), COALESCE(anchor, ''), COALESCE(errors, 0), COALESCE(parser_version, 1) "+
+		"FROM sources WHERE path=?", source).Scan(&row.identity, &row.offset, &row.anchor, &row.errors, &version)
 	switch {
 	case err == nil:
 		previous = &row
@@ -288,9 +290,15 @@ func (s *Store) Ingest(path, project, billingMode string) (int, error) {
 		offset = 0
 		detectedProject, detectedModel = "unassigned", "unknown"
 	}
-	// The malformed-record count survives incremental scans and resets when the file is replaced.
+	// A log read by an older parser is read again from the start; its events are kept and gain
+	// the fields the older parser skipped.
+	reread := previous != nil && !reset && version < parserVersion
+	if reread {
+		offset = 0
+	}
+	// The malformed-record count survives incremental scans and resets when the file is replaced or reread.
 	var errorCount int64
-	if previous != nil && !reset {
+	if previous != nil && !reset && !reread {
 		errorCount = previous.errors
 	}
 	added, pending := 0, 0
@@ -360,6 +368,10 @@ func ingestLine(st *ingestStatements, line []byte, start int64, source, session,
 	event, err := child(payload, "event")
 	if err != nil {
 		return 0, err
+	}
+	switch record["payload_type"] {
+	case "runtime.user_intent.accepted", "runtime.user_intent.materialized":
+		return 0, st.prompt(record, payload, start, source, session)
 	}
 	if record["payload_type"] == "runtime.session.metadata" {
 		meta, err := child(payload, "record")
@@ -474,24 +486,79 @@ func ingestLine(st *ingestStatements, line []byte, start int64, source, session,
 	if project == "unassigned" {
 		eventProject = *detectedProject
 	}
+	turn, _ := stringValue(payload["run_id"])
 	insert, err := st.prepare(&st.event, "INSERT OR IGNORE INTO events (id, session, parent, project, recorded_at, model, billing_mode, input, output, "+
-		"cached, source, sequence, usage_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+		"cached, source, sequence, usage_status, turn) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
 	if err != nil {
 		return 0, err
 	}
 	result, err := insert.Exec(rid, sid, nullString(parent), eventProject, recordedAt, model, billingMode, input, output, nullableInt(cached),
-		source, sequence, status)
+		source, sequence, status, nullString(turn))
 	if err != nil {
 		return 0, err
 	}
 	n, _ := result.RowsAffected()
+	if n == 0 && turn != "" {
+		// Read again by a newer parser: the event is already counted and only gains its turn.
+		update, err := st.prepare(&st.eventTurn, "UPDATE events SET turn=? WHERE id=? AND turn IS NULL")
+		if err != nil {
+			return 0, err
+		}
+		if _, err := update.Exec(turn, rid); err != nil {
+			return 0, err
+		}
+	}
 	return int(n), nil
 }
 
 // ingestStatements prepares each insert once per file rather than once per record.
 type ingestStatements struct {
-	tx             *sql.Tx
-	event, summary *sql.Stmt
+	tx                                       *sql.Tx
+	event, eventTurn, summary, intent, joins *sql.Stmt
+}
+
+// prompt records where a prompt is in the log (accepted), or which turn it went to (materialized).
+// A prompt that steers a running turn joins that turn rather than starting one.
+func (st *ingestStatements) prompt(record, payload map[string]any, start int64, source, session string) error {
+	intent, ok := stringValue(payload["intent_id"])
+	if !ok || intent == "" {
+		return nil
+	}
+	if record["payload_type"] == "runtime.user_intent.materialized" {
+		outcome, err := child(payload, "outcome")
+		if err != nil {
+			return err
+		}
+		turn, ok := stringValue(outcome["run_id"])
+		if !ok || turn == "" {
+			return nil
+		}
+		update, err := st.prepare(&st.joins, "UPDATE prompts SET turn=? WHERE intent=?")
+		if err != nil {
+			return err
+		}
+		_, err = update.Exec(turn, intent)
+		return err
+	}
+	recordedAt, err := recordTimestamp(record["recorded_at"])
+	if err != nil {
+		return err
+	}
+	stream, err := child(record, "stream")
+	if err != nil {
+		return err
+	}
+	sid := session
+	if truthy(stream["id"]) {
+		sid = pyStr(stream["id"])
+	}
+	insert, err := st.prepare(&st.intent, "INSERT INTO prompts (intent, session, turn, recorded_at, source, offset) VALUES (?,?,?,?,?,?) "+
+		"ON CONFLICT(intent) DO UPDATE SET session=excluded.session, recorded_at=excluded.recorded_at, source=excluded.source, offset=excluded.offset")
+	if err != nil {
+		return err
+	}
+	_, err = insert.Exec(intent, sid, intent, recordedAt, source, start)
+	return err
 }
 
 func (st *ingestStatements) prepare(slot **sql.Stmt, query string) (*sql.Stmt, error) {
@@ -506,7 +573,7 @@ func (st *ingestStatements) prepare(slot **sql.Stmt, query string) (*sql.Stmt, e
 }
 
 func (st *ingestStatements) close() {
-	for _, stmt := range []*sql.Stmt{st.event, st.summary} {
+	for _, stmt := range []*sql.Stmt{st.event, st.eventTurn, st.summary, st.intent, st.joins} {
 		if stmt != nil {
 			stmt.Close()
 		}
